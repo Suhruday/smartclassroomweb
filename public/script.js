@@ -2,14 +2,13 @@
 const state = {
     currentView: 'landing-content',
     roomPin: '000000',
-    students: [], // {socketId, name, id, status, lastPulse, lastHidden, alertCooldown}
+    students: [], // {socketId, name, id, status, lastPulse, lastHidden, turnOnCount, switchDuration, lastSwitchTime}
     userName: '',
     userId: '',
     socket: null,
     theme: localStorage.getItem('theme') || 'light',
     heartbeatInterval: null,
-    wakeLock: null,
-    lastInteraction: Date.now()
+    wakeLock: null
 };
 
 const getEl = (id) => document.getElementById(id);
@@ -22,7 +21,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setupEventListeners();
     setupSocketListeners();
-    setupMobileResilience();
 });
 
 // --- Student: High-Resilience Heartbeat ---
@@ -32,26 +30,14 @@ function startStudentHeartbeat() {
         if (state.socket && state.socket.connected) {
             state.socket.emit('heartbeat', {
                 pin: state.roomPin,
-                hidden: document.hidden,
-                focused: document.hasFocus()
+                hidden: document.hidden
             });
         }
-    }, 4000); // 4s interval is optimal for mobile background stability
-}
-
-function setupMobileResilience() {
-    const report = () => {
-        if (state.currentView === 'active-view' && state.socket) {
-            state.socket.emit('visibility-status', { pin: state.roomPin, hidden: document.hidden });
-        }
-    };
-    document.addEventListener('visibilitychange', report);
-    window.addEventListener('pagehide', report);
+    }, 5000); // 5s heartbeat
 }
 
 // --- Socket Listeners ---
 function setupSocketListeners() {
-    // Teacher: Process Incoming Signals
     state.socket.on('student-pulse', (data) => {
         if (state.currentView !== 'teacher-view') return;
         
@@ -64,11 +50,14 @@ function setupSocketListeners() {
                 status: 'Active',
                 lastPulse: Date.now(),
                 lastHidden: data.hidden,
-                alertCooldown: 0
+                turnOnCount: 0,
+                switchDuration: 0,
+                lastSwitchTime: null,
+                alertCooldown: 0,
+                lastMinuteAlert: 0
             };
             state.students.push(student);
-            logEvent(`${student.name} joined the session.`);
-            sendNotification('New Student Joined', `${student.name} is now connected.`);
+            logEvent(`${student.name} joined session.`);
         } else {
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
@@ -82,19 +71,15 @@ function setupSocketListeners() {
         if (student) {
             student.status = 'Disconnected';
             updateStudentList();
-            logEvent(`${student.name} has disconnected.`);
-            sendNotification('Student Disconnected', `${student.name} lost connection.`);
+            createPopupAlert(student.name, student.id, 'has disconnected', 'gray');
         }
     });
 
-    // Student: Success
     state.socket.on('joined-success', (data) => {
         getEl('active-status-text').textContent = `Focus Shield Active (Session #${data.pin})`;
         showView('active-view');
         startStudentHeartbeat();
     });
-
-    state.socket.on('error-msg', (msg) => alert(msg));
 }
 
 // --- Teacher Dashboard Brain (Detection & Alerts) ---
@@ -110,50 +95,63 @@ setInterval(() => {
         let nextStatus = student.status;
 
         // 1. Detection Logic
-        if (secSincePulse > 12) {
-            // Heartbeat fully stopped = Screen Locked or Phone Off
-            nextStatus = 'Screen Locked';
+        if (secSincePulse > 15) {
+            nextStatus = 'Phone Off';
         } else if (student.lastHidden) {
-            // Heartbeat is still arriving but tab is hidden = Switched App
             nextStatus = 'Switched App';
         } else {
             nextStatus = 'Active';
         }
 
-        // 2. Alert Management
+        // 2. State Change Handling
         if (nextStatus !== student.status) {
             const oldStatus = student.status;
             student.status = nextStatus;
             listChanged = true;
 
-            // Only notify if status changed significantly and not spamming (10s cooldown)
-            if (now - student.alertCooldown > 10000) {
-                if (nextStatus === 'Switched App') {
-                    triggerViolation(student, 'switched to another app');
-                } else if (nextStatus === 'Screen Locked' && oldStatus === 'Active') {
-                    logEvent(`${student.name} locked their phone.`);
-                } else if (nextStatus === 'Active' && (oldStatus === 'Switched App' || oldStatus === 'Screen Locked')) {
-                    triggerViolation(student, 'returned to class', 'green');
+            // --- Alerts & Metrics ---
+            if (nextStatus === 'Phone Off') {
+                createPopupAlert(student.name, student.id, 'turned off the phone', 'green');
+                logEvent(`${student.name} turned off phone.`);
+            } 
+            else if (nextStatus === 'Switched App') {
+                student.lastSwitchTime = now;
+                createPopupAlert(student.name, student.id, 'switched app', 'red');
+                playSound('alert');
+                sendNotification('Focus Violation', `${student.name} switched app.`);
+            } 
+            else if (nextStatus === 'Active' && (oldStatus === 'Phone Off' || oldStatus === 'Switched App')) {
+                student.turnOnCount++;
+                createPopupAlert(student.name, student.id, `turned on the phone. Count: ${student.turnOnCount}`, 'red');
+                logEvent(`${student.name} turned on phone (${student.turnOnCount}).`);
+                
+                // Clear switch duration logic
+                if (oldStatus === 'Switched App' && student.lastSwitchTime) {
+                    student.switchDuration += Math.round((now - student.lastSwitchTime) / 1000);
+                    student.lastSwitchTime = null;
                 }
-                student.alertCooldown = now;
             }
+        }
+
+        // 3. Persistent "Outside App" Tracker
+        if (student.status === 'Switched App' && student.lastSwitchTime) {
+            const durationOutside = Math.round((now - student.lastSwitchTime) / 1000);
+            
+            // Repeated Alert every 1 minute
+            if (durationOutside >= 60 && (now - student.lastMinuteAlert > 60000)) {
+                const mins = Math.floor(durationOutside / 60);
+                createPopupAlert(student.name, student.id, `has been outside the app for ${mins} minute(s)`, 'red');
+                student.lastMinuteAlert = now;
+                playSound('alert');
+            }
+            listChanged = true; // To update the live timer in the list
         }
     });
 
     if (listChanged) updateStudentList();
 }, 2000);
 
-function triggerViolation(student, message, color = 'red') {
-    createPopupAlert(student.name, student.id, message, color);
-    logEvent(`${student.name} ${message}`);
-    
-    if (color === 'red') {
-        sendNotification('Focus Violation', `${student.name} ${message}`);
-        playSound('alert');
-    }
-}
-
-// --- View & UI Helpers ---
+// --- UI Helpers ---
 function showView(sectionId) {
     const landing = getEl('landing-content');
     const dashboards = getEl('dashboard-content');
@@ -176,42 +174,64 @@ function updateStudentList() {
 
     count.textContent = state.students.length;
     list.innerHTML = state.students.map(student => {
-        let color = '#10b981'; // Active
-        if (student.status === 'Switched App') color = '#ef4444'; // Violation
-        if (student.status === 'Screen Locked') color = '#f59e0b'; // Warn
-        if (student.status === 'Disconnected') color = '#64748b'; // Off
+        let color = '#3b82f6'; // Blue (Active)
+        if (student.status === 'Switched App') color = '#ef4444'; // Red
+        if (student.status === 'Phone Off') color = '#10b981'; // Green
+        if (student.status === 'Disconnected') color = '#64748b'; // Gray
+
+        const now = Date.now();
+        let currentSwitchTime = 0;
+        if (student.status === 'Switched App' && student.lastSwitchTime) {
+            currentSwitchTime = Math.round((now - student.lastSwitchTime) / 1000);
+        }
+        const totalSwitchTime = student.switchDuration + currentSwitchTime;
 
         return `
-            <li>
-                <div class="student-info">
+            <li class="student-item-large">
+                <div class="student-main-info">
                     <span class="student-name">${student.name}</span>
-                    <span class="student-id">${student.status}</span>
+                    <span class="student-id">ID: ${student.id}</span>
                 </div>
-                <div class="status-indicator" style="background: ${color}"></div>
+                <div class="student-metrics">
+                    <div class="metric">
+                        <span class="m-label">Turned On:</span>
+                        <span class="m-value">${student.turnOnCount}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="m-label">Outside App:</span>
+                        <span class="m-value">${totalSwitchTime}s</span>
+                    </div>
+                </div>
+                <span class="status-badge-solid" style="background: ${color}">
+                    ${student.status}
+                </span>
             </li>
         `;
     }).join('');
 }
 
-function createPopupAlert(name, id, message, color) {
+function createPopupAlert(name, id, message, colorType) {
     const container = getEl('alert-container');
     if (!container) return;
 
+    let hexColor = '#10b981'; // green
+    if (colorType === 'red') hexColor = '#ef4444';
+    if (colorType === 'gray') hexColor = '#64748b';
+
     const toast = document.createElement('div');
     toast.className = `alert-toast opened`;
+    toast.style.borderLeft = `5px solid ${hexColor}`;
     toast.innerHTML = `
-        <div class="alert-icon"><i data-lucide="${color === 'red' ? 'layers' : 'zap'}"></i></div>
         <div class="alert-content">
-            <h4>${name}</h4>
-            <p class="alert-status ${color}">${message}</p>
+            <h4>${name} (${id})</h4>
+            <p class="alert-status" style="color: ${hexColor}">${message}</p>
         </div>
     `;
     container.appendChild(toast);
-    if (window.lucide) lucide.createIcons();
     setTimeout(() => {
         toast.style.opacity = '0';
         setTimeout(() => toast.remove(), 500);
-    }, 5000);
+    }, 6000);
 }
 
 function logEvent(msg) {
@@ -222,12 +242,6 @@ function logEvent(msg) {
     entry.className = 'log-entry';
     entry.innerHTML = `<span class="log-time">[${time}]</span> ${msg}`;
     log.prepend(entry);
-    if (log.children.length > 50) log.lastChild.remove();
-}
-
-// --- Notifications & Sound ---
-function requestPermissions() {
-    if ("Notification" in window) Notification.requestPermission();
 }
 
 function sendNotification(title, body) {
@@ -243,7 +257,7 @@ function playSound(type) {
         const gain = audioCtx.createGain();
         osc.type = 'sine';
         osc.frequency.setValueAtTime(type === 'alert' ? 440 : 880, audioCtx.currentTime);
-        gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
         osc.connect(gain);
         gain.connect(audioCtx.destination);
         osc.start();
@@ -251,19 +265,17 @@ function playSound(type) {
     } catch (e) {}
 }
 
-// --- Setup ---
 function setupEventListeners() {
     const tBtns = [getEl('hero-btn-teacher'), getEl('nav-btn-teacher')];
     tBtns.forEach(b => b?.addEventListener('click', () => {
         generatePin();
         showView('teacher-view');
         state.socket.emit('create-room', state.roomPin);
-        requestPermissions();
+        if ("Notification" in window) Notification.requestPermission();
         requestWakeLock();
     }));
 
-    getEl('hero-btn-student')?.addEventListener('click', () => showView('student-view'));
-    getEl('nav-btn-student')?.addEventListener('click', () => showView('student-view'));
+    [getEl('hero-btn-student'), getEl('nav-btn-student')].forEach(b => b?.addEventListener('click', () => showView('student-view')));
 
     getEl('join-form')?.addEventListener('submit', (e) => {
         e.preventDefault();

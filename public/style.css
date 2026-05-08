@@ -271,12 +271,62 @@ h1, h2, h3, h4 {
     outline: none;
 }
 
-/* Student List */
-.student-item {
-    padding: 1rem;
+/* Student List Large */
+.student-item-large {
+    padding: 1.5rem;
     border-bottom: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.student-main-info {
     display: flex;
-    justify-content: space-between;
+    flex-direction: column;
+}
+
+.student-name {
+    font-weight: 700;
+    font-size: 1.1rem;
+}
+
+.student-id {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.student-metrics {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.metric {
+    font-size: 0.8rem;
+    display: flex;
+    gap: 0.5rem;
+}
+
+.m-label {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.m-value {
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.status-badge-solid {
+    padding: 0.5rem 1rem;
+    border-radius: 20px;
+    color: #ffffff;
+    font-size: 0.75rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    min-width: 120px;
+    text-align: center;
 }
 
 /* Forms */
