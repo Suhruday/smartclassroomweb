@@ -38,14 +38,14 @@ function startStudentHeartbeat() {
                 hidden: document.hidden
             });
         }
-    }, 5000); 
+    }, 5000);
 }
 
 // --- Socket Listeners ---
 function setupSocketListeners() {
     state.socket.on('student-pulse', (data) => {
         if (state.currentView !== 'teacher-view') return;
-        
+
         let student = state.students.find(s => s.id === data.id);
         if (!student) {
             student = {
@@ -68,12 +68,12 @@ function setupSocketListeners() {
                 clearTimeout(student.offlineTimeout);
                 student.offlineTimeout = null;
             }
-            
+
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
-            
+
             // --- CRITICAL FIX: IMMEDIATE UNLOCK DETECTION ---
-            if (!data.hidden && (student.status === 'Phone Off' || student.status === 'Switched App')) {
+            if (!data.hidden && (student.status === 'Phone Off' || student.status === 'Phone off')) {
                 handleStudentReturn(student);
             }
 
@@ -102,10 +102,10 @@ function setupSocketListeners() {
             if (student.offlineTimeout) clearTimeout(student.offlineTimeout);
             student.offlineTimeout = setTimeout(() => {
                 if (student.status === 'Phone Off') {
-                    student.status = 'Disconnected';
+                    //student.status = 'Disconnected';
                     updateStudentList();
                 }
-            }, 600000); 
+            }, 600000);
         }
     });
 
@@ -121,10 +121,10 @@ function handleStudentReturn(student) {
     student.status = 'Active';
     student.turnOnCount++;
     student.firstHiddenTime = null;
-    
+
     createPopupAlert(student.name, student.id, 'turned on the phone', 'red');
     logEvent(`${student.name} turned on phone (${student.turnOnCount}).`);
-    
+
     if (oldStatus === 'Switched App' && student.lastSwitchTime) {
         student.switchDuration += Math.round((Date.now() - student.lastSwitchTime) / 1000);
         student.lastSwitchTime = null;
@@ -145,22 +145,22 @@ setInterval(() => {
         let nextStatus = student.status;
 
         // --- IMPROVED LOGIC: PHONE LOCK VS SWITCH ---
-        
+
         if (secSincePulse > 15) {
             // Heartbeat stopped completely = Screen Locked
             nextStatus = 'Phone Off';
             student.firstHiddenTime = null;
-        } 
+        }
         else if (student.lastHidden) {
             // If tab is hidden BUT we are still getting pulses (secSincePulse < 10)
             // AND they have been hidden for more than 12 seconds continuously
-            if (student.firstHiddenTime && (now - student.firstHiddenTime > 12000)) {
+            if (student.firstHiddenTime && (now - student.firstHiddenTime > 5000)) {
                 nextStatus = 'Switched App';
             } else {
                 // In the grace period - wait to see if heartbeats stop
                 // Do NOT change status to Switched App yet
             }
-        } 
+        }
         else {
             nextStatus = 'Active';
         }
@@ -168,16 +168,16 @@ setInterval(() => {
         // --- Handle State Changes ---
         if (nextStatus !== student.status) {
             const oldStatus = student.status;
-            
+
             if (nextStatus === 'Phone Off') {
                 createPopupAlert(student.name, student.id, 'turned off the phone', 'green');
                 logEvent(`${student.name} turned off phone.`);
-            } 
+            }
             else if (nextStatus === 'Switched App') {
                 student.lastSwitchTime = now;
                 createPopupAlert(student.name, student.id, 'switched app', 'red');
                 playSound('alert');
-            } 
+            }
             // Note: Return (Active) is handled instantly in the socket listener for speed
 
             student.status = nextStatus;
@@ -284,7 +284,7 @@ function playSound(type) {
         osc.connect(audioCtx.destination);
         osc.start();
         osc.stop(audioCtx.currentTime + 0.05);
-    } catch (e) {}
+    } catch (e) { }
 }
 
 function setupEventListeners() {
@@ -322,6 +322,6 @@ function generatePin() {
 
 async function requestWakeLock() {
     if ('wakeLock' in navigator) {
-        try { state.wakeLock = await navigator.wakeLock.request('screen'); } catch (err) {}
+        try { state.wakeLock = await navigator.wakeLock.request('screen'); } catch (err) { }
     }
 }
