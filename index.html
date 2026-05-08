@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartClass | Digital Classroom Focus</title>
+    <meta name="description" content="A professional website for digital classroom monitoring. Stay focused, stay secure, and eliminate distractions.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+
+    <!-- Navigation -->
+    <header class="navbar">
+        <div class="nav-container">
+            <div class="logo" onclick="window.location.reload()">
+                <i data-lucide="shield-check" class="logo-icon"></i>
+                <span>SmartClass</span>
+            </div>
+            <nav class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#how-it-works">How it Works</a>
+                <a href="#about">About</a>
+            </nav>
+            <div class="nav-actions">
+                <button class="btn-theme" id="theme-toggle" title="Toggle Theme">
+                    <i data-lucide="moon"></i>
+                </button>
+                <button class="btn-nav btn-student-link" id="nav-btn-student">Join Connect</button>
+                <button class="btn-nav btn-primary-nav" id="nav-btn-teacher">Educator Login</button>
+            </div>
+        </div>
+    </header>
+
+    <main id="main-content">
+        <!-- Default Website Content -->
+        <div id="landing-content">
+            <!-- Hero Section -->
+            <section class="hero-section">
+                <div class="hero-content">
+                    <div class="badge">SECURE • REAL-TIME • FOCUSED</div>
+                    <h1>Elevate Learning with <span class="gradient-text">Digital Focus</span></h1>
+                    <p>SmartClass is a unified web platform that helps educators maintain a distraction-free environment. No installations, no setup—just pure focus.</p>
+                    <div class="hero-btns">
+                        <button class="btn-hero-primary" id="hero-btn-teacher">
+                            <i data-lucide="graduation-cap"></i> Start Session
+                        </button>
+                        <button class="btn-hero-secondary" id="hero-btn-student">
+                            <i data-lucide="users"></i> Join Session
+                        </button>
+                    </div>
+                </div>
+                <div class="hero-visual">
+                    <div class="mockup-container">
+                        <div class="mockup-header">
+                            <div class="mockup-dots"><span></span><span></span><span></span></div>
+                            <div class="mockup-title">SmartClass Live Dashboard</div>
+                        </div>
+                        <div class="mockup-body">
+                            <div class="mockup-row">
+                                <div class="mockup-avatar"></div>
+                                <div class="mockup-line"></div>
+                                <div class="mockup-status online"></div>
+                            </div>
+                            <div class="mockup-row">
+                                <div class="mockup-avatar"></div>
+                                <div class="mockup-line"></div>
+                                <div class="mockup-status distracted"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Features Section -->
+            <section id="features" class="features-section">
+                <div class="section-header">
+                    <h2>Engineered for Education</h2>
+                    <p>Everything you need to manage a digital classroom in one place.</p>
+                </div>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon"><i data-lucide="zap"></i></div>
+                        <h3>Live Tracking</h3>
+                        <p>Instant updates when students focus or divert their attention from the lesson.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon"><i data-lucide="shield-check"></i></div>
+                        <h3>Pure Privacy</h3>
+                        <p>We respect data sovereignty. No browser history or personal files are ever accessed.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon"><i data-lucide="globe"></i></div>
+                        <h3>Web Native</h3>
+                        <p>Zero downloads required. Works instantly on any device with a modern browser.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- How It Works Section -->
+            <section id="how-it-works" class="how-it-works">
+                <div class="section-header">
+                    <h2>Seamless Experience</h2>
+                </div>
+                <div class="steps-container">
+                    <div class="step">
+                        <div class="step-num">01</div>
+                        <h3>Create</h3>
+                        <p>Educators generate a 6-digit access code for their specific session.</p>
+                    </div>
+                    <div class="step">
+                        <div class="step-num">02</div>
+                        <h3>Connect</h3>
+                        <p>Students enter their name and code to join the secure session.</p>
+                    </div>
+                    <div class="step">
+                        <div class="step-num">03</div>
+                        <h3>Focus</h3>
+                        <p>The dashboard monitors classroom presence in real-time.</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Dashboard Views (Integrated into site flow) -->
+        <div id="dashboard-content" class="hidden">
+            <!-- Educator Dashboard -->
+            <section id="teacher-view" class="dashboard-section hidden">
+                <div class="content-card compact-card">
+                    <div class="status-header">
+                        <div class="status-badge">EDUCATOR DASHBOARD</div>
+                        <button class="btn-close back-to-landing"><i data-lucide="chevron-left"></i></button>
+                    </div>
+                    <h2>Session Control</h2>
+                    <p>Manage your classroom's digital focus from this dashboard.</p>
+                    
+                    <div class="pin-display">
+                        <span class="pin-label">SESSION ACCESS CODE</span>
+                        <div class="pin-input-group">
+                            <input type="text" class="pin-code-input" id="teacher-pin-input" value="000000" maxlength="6">
+                            <button class="btn-icon-refresh" id="btn-refresh-pin" title="New Code">
+                                <i data-lucide="refresh-cw"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="student-list-container">
+                        <div class="list-header">
+                            <h3>Connected Students</h3>
+                            <span id="student-count" class="count-pill">0</span>
+                        </div>
+                        <ul id="student-list" class="student-list">
+                            <li class="empty-state">Waiting for students...</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Student Connect View -->
+            <section id="student-view" class="dashboard-section hidden">
+                <div class="content-card compact-card">
+                    <div class="status-header">
+                        <div class="status-badge">STUDENT CONNECT</div>
+                        <button class="btn-close back-to-landing"><i data-lucide="chevron-left"></i></button>
+                    </div>
+                    <h2>Join Session</h2>
+                    <p>Enter your details and code to connect to the class.</p>
+                    
+                    <form id="join-form" class="join-form">
+                        <div class="input-group">
+                            <label for="student-name">Full Name</label>
+                            <div class="input-wrapper">
+                                <i data-lucide="user"></i>
+                                <input type="text" id="student-name" placeholder="Name" required>
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <label for="student-id">Student ID</label>
+                            <div class="input-wrapper">
+                                <i data-lucide="fingerprint"></i>
+                                <input type="text" id="student-id" placeholder="ID" required>
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <label for="room-pin">Session Code</label>
+                            <div class="input-wrapper">
+                                <i data-lucide="key-round"></i>
+                                <input type="text" id="room-pin" placeholder="000000" maxlength="6" required>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn-primary">
+                            Connect to Class <i data-lucide="arrow-right"></i>
+                        </button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Student Active View -->
+            <section id="active-view" class="dashboard-section hidden">
+                <div class="content-card compact-card centered">
+                    <div class="pulse-ring">
+                        <div class="success-icon">
+                            <i data-lucide="check-circle-2"></i>
+                        </div>
+                    </div>
+                    <h2>Connected Successfully</h2>
+                    <p id="active-status-text">Direct link established.</p>
+                    <div class="monitoring-badge">
+                        <span class="dot"></span> FOCUS MODE ACTIVE
+                    </div>
+                    <div class="instruction-box">
+                        <p>Your session is active. Please keep this website open to maintain your focus status.</p>
+                    </div>
+                    <button class="btn-outline back-to-landing">Disconnect</button>
+                </div>
+            </section>
+        </div>
+
+        <!-- Alert Container -->
+        <div id="alert-container" class="alert-container"></div>
+    </main>
+
+    <footer class="site-footer">
+        <div class="footer-content">
+            <div class="footer-brand">
+                <div class="logo">
+                    <i data-lucide="shield-check"></i>
+                    <span>SmartClass</span>
+                </div>
+                <p>Pure web monitoring for modern education.</p>
+            </div>
+            <div class="footer-links">
+                <div class="link-group">
+                    <h4>Resources</h4>
+                    <a href="#features">Features</a>
+                    <a href="#">Security</a>
+                </div>
+                <div class="link-group">
+                    <h4>Contact</h4>
+                    <a href="#">Support</a>
+                </div>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2024 SmartClass. Built for the Web.</p>
+        </div>
+    </footer>
+
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
+
+
