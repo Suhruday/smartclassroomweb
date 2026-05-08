@@ -39,18 +39,14 @@ function startStudentHeartbeat() {
                 hidden: document.hidden
             });
         }
-    }, 4000); // 4s for balanced speed
+    }, 4000);
 }
 
 // --- Socket Listeners ---
 function setupSocketListeners() {
     state.socket.on('connect', () => {
         if (state.isJoined) {
-            state.socket.emit('join-room', { 
-                pin: state.roomPin, 
-                name: state.userName, 
-                id: state.userId 
-            });
+            state.socket.emit('join-room', { pin: state.roomPin, name: state.userName, id: state.userId });
         }
     });
 
@@ -63,7 +59,7 @@ function setupSocketListeners() {
                 socketId: data.socketId,
                 name: data.name,
                 id: data.id,
-                status: data.hidden ? 'Active' : 'Active', // Never start in 'Switched'
+                status: 'Active',
                 lastPulse: Date.now(),
                 lastHidden: data.hidden,
                 turnOnCount: 0,
@@ -72,37 +68,25 @@ function setupSocketListeners() {
             state.students.push(student);
             logEvent(`${student.name} connected.`);
         } else {
-            const oldStatus = student.status;
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
             
-            // --- LOGIC: DIFFERENTIATE LOCK VS SWITCH ---
-            
             if (!data.hidden) {
-                // CASE 1: Student is looking at the screen (Active)
                 if (student.status !== 'Active') {
                     student.turnOnCount++;
                     student.status = 'Active';
-                    createPopupAlert(student.name, student.id, 'turned on the phone', 'red');
+                    triggerAlert(student, 'turned on the phone', 'red');
                     logEvent(`${student.name} returned/turned on.`);
                 }
                 student.hiddenPulseCount = 0;
             } else {
-                // CASE 2: Tab is hidden (Could be Lock or App Switch)
-                // We increment a counter. We ONLY mark as 'Switched App' if heartbeats 
-                // continue to arrive (hiddenPulseCount > 1).
                 student.hiddenPulseCount++;
-                
                 if (student.hiddenPulseCount >= 2 && student.status !== 'Switched App') {
-                    // This is definitely a Switched App because pulses ARE arriving while hidden
                     student.status = 'Switched App';
-                    createPopupAlert(student.name, student.id, 'switched app', 'red');
-                    playSound();
+                    triggerAlert(student, 'switched app', 'red', true); // true for sound
                     logEvent(`${student.name} switched app.`);
                 }
-                // If hiddenPulseCount is only 1, we WAIT. If they lock phone, no more pulses arrive.
             }
-            
             student.lastHidden = data.hidden;
         }
         updateStudentList();
@@ -111,12 +95,10 @@ function setupSocketListeners() {
     state.socket.on('student-offline', (data) => {
         const student = state.students.find(s => s.socketId === data.socketId);
         if (student) {
-            // Socket disconnected = Phone locked. 
-            // Mark as 'Phone Off' (Green) IMMEDIATELY.
             student.status = 'Phone Off';
             student.hiddenPulseCount = 0;
             updateStudentList();
-            createPopupAlert(student.name, student.id, 'turned off the phone', 'green');
+            triggerAlert(student, 'turned off the phone', 'green');
             logEvent(`${student.name} turned off phone.`);
         }
     });
@@ -129,7 +111,20 @@ function setupSocketListeners() {
     });
 }
 
-// --- Teacher Watchdog: Handles Silent Pulse Fades ---
+function triggerAlert(student, message, colorType, withSound = false) {
+    // 1. On-screen Toast
+    createPopupAlert(student.name, student.id, message, colorType);
+    
+    // 2. System Notification (if teacher is in another app)
+    if (document.hidden) {
+        sendSystemNotification('Class Monitor Alert', `${student.name} ${message}`);
+    }
+
+    // 3. Optional Sound
+    if (withSound) playSound();
+}
+
+// --- Teacher Watchdog ---
 setInterval(() => {
     if (state.currentView !== 'teacher-view') return;
     const now = Date.now();
@@ -137,9 +132,7 @@ setInterval(() => {
 
     state.students.forEach(student => {
         if (student.status === 'Disconnected') return;
-        
         const secSincePulse = (now - student.lastPulse) / 1000;
-        // If pulses stop for 12s, mark as Phone Off
         if (secSincePulse > 12 && student.status !== 'Phone Off') {
             student.status = 'Phone Off';
             student.hiddenPulseCount = 0;
@@ -208,7 +201,7 @@ function createPopupAlert(name, id, message, colorType) {
     toast.style.borderLeft = `5px solid ${hexColor}`;
     toast.innerHTML = `
         <div class="alert-content">
-            <h4>${name} (${id})</h4>
+            <h4>${name}</h4>
             <p class="alert-status" style="color: ${hexColor}">${message}</p>
         </div>
     `;
@@ -227,6 +220,12 @@ function logEvent(msg) {
     entry.className = 'log-entry';
     entry.innerHTML = `<span class="log-time">[${time}]</span> ${msg}`;
     log.prepend(entry);
+}
+
+function sendSystemNotification(title, body) {
+    if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(title, { body });
+    }
 }
 
 function playSound() {
