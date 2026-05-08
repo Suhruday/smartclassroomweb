@@ -72,40 +72,39 @@ function setupSocketListeners() {
                 hiddenPulseCount: 0 
             };
             state.students.push(student);
-            logEvent(`${student.name} connected.`);
+            logEvent(`${student.name} joined.`);
         } else {
             const oldStatus = student.status;
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
             
-            // --- REFINED DETECTION ENGINE ---
-            
             if (!data.hidden) {
-                // Return to App
+                // RETURN TO CLASS
                 if (student.status !== 'Active') {
                     student.turnOnCount++;
                     student.status = 'Active';
-                    triggerAlert(student, 'returned to class', 'red');
-                    logEvent(`${student.name} returned.`);
+                    triggerAlert(student, 'turned on the phone', 'red');
+                    logEvent(`${student.name} turned on phone.`);
                 }
                 student.firstHiddenTime = null;
                 student.hiddenPulseCount = 0;
             } else {
-                // Tab Hidden
+                // TAB HIDDEN
                 if (!student.lastHidden) {
                     student.firstHiddenTime = Date.now();
                     student.hiddenPulseCount = 0;
                 }
                 
-                // Only count regular (non-instant) heartbeats while hidden
+                // Only count REGULAR heartbeats while hidden
                 if (!data.isInstant) {
                     student.hiddenPulseCount++;
                 }
 
-                // --- THE RULE: ONLY CONFIRM SWITCH IF PULSES CONTINUE ---
-                // We need at least 2 regular heartbeats AND 5 seconds of being hidden
+                // --- ROBUST SWITCH DETECTION ---
+                // We need at least 3 regular heartbeats (9 seconds) to confirm a switch.
+                // This prevents the 'Switched App' flicker during a 1-2 second lock delay.
                 if (student.status !== 'Switched App' && student.status !== 'Phone Off') {
-                    if (student.hiddenPulseCount >= 2 && (Date.now() - student.firstHiddenTime > 5000)) {
+                    if (student.hiddenPulseCount >= 3) {
                         student.status = 'Switched App';
                         triggerAlert(student, 'switched app', 'red', true);
                         logEvent(`${student.name} switched app.`);
@@ -120,7 +119,7 @@ function setupSocketListeners() {
     state.socket.on('student-offline', (data) => {
         const student = state.students.find(s => s.socketId === data.socketId);
         if (student) {
-            // Immediate "Phone Off" on disconnect
+            // Socket drop = Instant Green
             if (student.status !== 'Phone Off') {
                 student.status = 'Phone Off';
                 student.firstHiddenTime = null;
@@ -147,7 +146,7 @@ function triggerAlert(student, message, colorType, withSound = false) {
     if (withSound) playSound();
 }
 
-// --- Teacher Watchdog: Fast Silence Detection ---
+// --- Teacher Watchdog: Instant Silence Detection ---
 setInterval(() => {
     if (state.currentView !== 'teacher-view') return;
     const now = Date.now();
@@ -157,13 +156,14 @@ setInterval(() => {
         if (student.status === 'Disconnected') return;
         const secSincePulse = (now - student.lastPulse) / 1000;
         
-        // If silence for 6 seconds, it's definitely Phone Off
-        if (secSincePulse > 6 && student.status !== 'Phone Off') {
+        // If silence for 5 seconds, it's definitely Phone Off.
+        // We use 5s because heartbeats happen every 3s.
+        if (secSincePulse > 5 && student.status !== 'Phone Off') {
             student.status = 'Phone Off';
             student.firstHiddenTime = null;
             student.hiddenPulseCount = 0;
             triggerAlert(student, 'turned off the phone', 'green');
-            logEvent(`${student.name} turned off.`);
+            logEvent(`${student.name} turned off phone.`);
             changed = true;
         }
     });
@@ -294,7 +294,7 @@ function setupEventListeners() {
         localStorage.setItem('theme', state.theme);
     });
 
-    // Send instant pulse when hidden to trigger the check window
+    // Send instant pulse when hidden to verify the lock
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) sendPulse(true);
     });
