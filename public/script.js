@@ -34,12 +34,18 @@ function startStudentHeartbeat() {
     if (state.heartbeatInterval) clearInterval(state.heartbeatInterval);
     state.heartbeatInterval = setInterval(() => {
         if (state.socket && state.socket.connected && state.isJoined) {
-            state.socket.emit('heartbeat', {
-                pin: state.roomPin,
-                hidden: document.hidden
-            });
+            sendPulse();
         }
-    }, 4000);
+    }, 3000); // Faster heartbeat (3s)
+}
+
+function sendPulse() {
+    if (state.socket && state.socket.connected && state.isJoined) {
+        state.socket.emit('heartbeat', {
+            pin: state.roomPin,
+            hidden: document.hidden
+        });
+    }
 }
 
 // --- Socket Listeners ---
@@ -83,7 +89,7 @@ function setupSocketListeners() {
                 student.hiddenPulseCount++;
                 if (student.hiddenPulseCount >= 2 && student.status !== 'Switched App') {
                     student.status = 'Switched App';
-                    triggerAlert(student, 'switched app', 'red', true); // true for sound
+                    triggerAlert(student, 'switched app', 'red', true); 
                     logEvent(`${student.name} switched app.`);
                 }
             }
@@ -95,11 +101,14 @@ function setupSocketListeners() {
     state.socket.on('student-offline', (data) => {
         const student = state.students.find(s => s.socketId === data.socketId);
         if (student) {
-            student.status = 'Phone Off';
-            student.hiddenPulseCount = 0;
-            updateStudentList();
-            triggerAlert(student, 'turned off the phone', 'green');
-            logEvent(`${student.name} turned off phone.`);
+            // Instant detection when socket drops
+            if (student.status !== 'Phone Off') {
+                student.status = 'Phone Off';
+                student.hiddenPulseCount = 0;
+                updateStudentList();
+                triggerAlert(student, 'turned off the phone', 'green');
+                logEvent(`${student.name} turned off phone.`);
+            }
         }
     });
 
@@ -112,11 +121,14 @@ function setupSocketListeners() {
 }
 
 function triggerAlert(student, message, colorType, withSound = false) {
+    // Include Name and ID in all alerts
+    const fullMsg = `${student.name} (${student.id}) ${message}`;
+    
     // 1. On-screen Toast
     createPopupAlert(student.name, student.id, message, colorType);
     
-    // 2. ALWAYS send System Notification (Browser Alert)
-    sendSystemNotification('SmartClass Monitor', `${student.name} ${message}`);
+    // 2. Browser Notification (Now includes ID)
+    sendSystemNotification('Class Monitor Alert', fullMsg);
 
     // 3. Optional Sound
     if (withSound) playSound();
@@ -131,15 +143,19 @@ setInterval(() => {
     state.students.forEach(student => {
         if (student.status === 'Disconnected') return;
         const secSincePulse = (now - student.lastPulse) / 1000;
-        if (secSincePulse > 12 && student.status !== 'Phone Off') {
+        
+        // Faster timeout (7s) to detect phone lock almost instantly
+        if (secSincePulse > 7 && student.status !== 'Phone Off') {
             student.status = 'Phone Off';
             student.hiddenPulseCount = 0;
+            triggerAlert(student, 'turned off the phone', 'green');
+            logEvent(`${student.name} turned off phone.`);
             changed = true;
         }
     });
 
     if (changed) updateStudentList();
-}, 2000);
+}, 1000); // Watchdog runs every 1 second
 
 // --- UI Helpers ---
 function showView(sectionId) {
@@ -199,7 +215,7 @@ function createPopupAlert(name, id, message, colorType) {
     toast.style.borderLeft = `5px solid ${hexColor}`;
     toast.innerHTML = `
         <div class="alert-content">
-            <h4>${name}</h4>
+            <h4>${name} (${id})</h4>
             <p class="alert-status" style="color: ${hexColor}">${message}</p>
         </div>
     `;
@@ -222,15 +238,8 @@ function logEvent(msg) {
 
 function sendSystemNotification(title, body) {
     if (!("Notification" in window)) return;
-    
     if (Notification.permission === "granted") {
         new Notification(title, { body, icon: '/favicon.ico' });
-    } else if (Notification.permission !== "denied") {
-        Notification.requestPermission().then(permission => {
-            if (permission === "granted") {
-                new Notification(title, { body, icon: '/favicon.ico' });
-            }
-        });
     }
 }
 
@@ -251,7 +260,7 @@ function setupEventListeners() {
         generatePin();
         showView('teacher-view');
         state.socket.emit('create-room', state.roomPin);
-        sendSystemNotification('Alerts Enabled', 'You will now receive system notifications.');
+        if ("Notification" in window) Notification.requestPermission();
         requestWakeLock();
     }));
 
@@ -269,6 +278,11 @@ function setupEventListeners() {
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         document.documentElement.setAttribute('data-theme', state.theme);
         localStorage.setItem('theme', state.theme);
+    });
+
+    // Send instant pulse when hidden to reduce lag
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) sendPulse();
     });
 }
 
