@@ -2,7 +2,7 @@
 const state = {
     currentView: 'landing-content',
     roomPin: '000000',
-    students: [], // {socketId, name, id, status, lastPulse, lastHidden, turnOnCount, hiddenPulseCount}
+    students: [], // {socketId, name, id, status, lastPulse, lastHidden, turnOnCount, firstHiddenTime, hiddenPulseCount}
     userName: '',
     userId: '',
     socket: null,
@@ -33,17 +33,16 @@ document.addEventListener('DOMContentLoaded', () => {
 function startStudentHeartbeat() {
     if (state.heartbeatInterval) clearInterval(state.heartbeatInterval);
     state.heartbeatInterval = setInterval(() => {
-        if (state.socket && state.socket.connected && state.isJoined) {
-            sendPulse();
-        }
-    }, 3000); // Faster heartbeat (3s)
+        sendPulse(false); // Periodic heartbeat
+    }, 3000); 
 }
 
-function sendPulse() {
+function sendPulse(isInstant = false) {
     if (state.socket && state.socket.connected && state.isJoined) {
         state.socket.emit('heartbeat', {
             pin: state.roomPin,
-            hidden: document.hidden
+            hidden: document.hidden,
+            isInstant: isInstant
         });
     }
 }
@@ -69,28 +68,48 @@ function setupSocketListeners() {
                 lastPulse: Date.now(),
                 lastHidden: data.hidden,
                 turnOnCount: 0,
+                firstHiddenTime: data.hidden ? Date.now() : null,
                 hiddenPulseCount: 0 
             };
             state.students.push(student);
             logEvent(`${student.name} connected.`);
         } else {
+            const oldStatus = student.status;
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
             
+            // --- REFINED DETECTION ENGINE ---
+            
             if (!data.hidden) {
+                // Return to App
                 if (student.status !== 'Active') {
                     student.turnOnCount++;
                     student.status = 'Active';
-                    triggerAlert(student, 'turned on the phone', 'red');
-                    logEvent(`${student.name} returned/turned on.`);
+                    triggerAlert(student, 'returned to class', 'red');
+                    logEvent(`${student.name} returned.`);
                 }
+                student.firstHiddenTime = null;
                 student.hiddenPulseCount = 0;
             } else {
-                student.hiddenPulseCount++;
-                if (student.hiddenPulseCount >= 2 && student.status !== 'Switched App') {
-                    student.status = 'Switched App';
-                    triggerAlert(student, 'switched app', 'red', true); 
-                    logEvent(`${student.name} switched app.`);
+                // Tab Hidden
+                if (!student.lastHidden) {
+                    student.firstHiddenTime = Date.now();
+                    student.hiddenPulseCount = 0;
+                }
+                
+                // Only count regular (non-instant) heartbeats while hidden
+                if (!data.isInstant) {
+                    student.hiddenPulseCount++;
+                }
+
+                // --- THE RULE: ONLY CONFIRM SWITCH IF PULSES CONTINUE ---
+                // We need at least 2 regular heartbeats AND 5 seconds of being hidden
+                if (student.status !== 'Switched App' && student.status !== 'Phone Off') {
+                    if (student.hiddenPulseCount >= 2 && (Date.now() - student.firstHiddenTime > 5000)) {
+                        student.status = 'Switched App';
+                        triggerAlert(student, 'switched app', 'red', true);
+                        logEvent(`${student.name} switched app.`);
+                    }
                 }
             }
             student.lastHidden = data.hidden;
@@ -101,13 +120,14 @@ function setupSocketListeners() {
     state.socket.on('student-offline', (data) => {
         const student = state.students.find(s => s.socketId === data.socketId);
         if (student) {
-            // Instant detection when socket drops
+            // Immediate "Phone Off" on disconnect
             if (student.status !== 'Phone Off') {
                 student.status = 'Phone Off';
+                student.firstHiddenTime = null;
                 student.hiddenPulseCount = 0;
                 updateStudentList();
                 triggerAlert(student, 'turned off the phone', 'green');
-                logEvent(`${student.name} turned off phone.`);
+                logEvent(`${student.name} turned off.`);
             }
         }
     });
@@ -121,20 +141,13 @@ function setupSocketListeners() {
 }
 
 function triggerAlert(student, message, colorType, withSound = false) {
-    // Include Name and ID in all alerts
     const fullMsg = `${student.name} (${student.id}) ${message}`;
-    
-    // 1. On-screen Toast
     createPopupAlert(student.name, student.id, message, colorType);
-    
-    // 2. Browser Notification (Now includes ID)
     sendSystemNotification('Class Monitor Alert', fullMsg);
-
-    // 3. Optional Sound
     if (withSound) playSound();
 }
 
-// --- Teacher Watchdog ---
+// --- Teacher Watchdog: Fast Silence Detection ---
 setInterval(() => {
     if (state.currentView !== 'teacher-view') return;
     const now = Date.now();
@@ -144,18 +157,19 @@ setInterval(() => {
         if (student.status === 'Disconnected') return;
         const secSincePulse = (now - student.lastPulse) / 1000;
         
-        // Faster timeout (7s) to detect phone lock almost instantly
-        if (secSincePulse > 7 && student.status !== 'Phone Off') {
+        // If silence for 6 seconds, it's definitely Phone Off
+        if (secSincePulse > 6 && student.status !== 'Phone Off') {
             student.status = 'Phone Off';
+            student.firstHiddenTime = null;
             student.hiddenPulseCount = 0;
             triggerAlert(student, 'turned off the phone', 'green');
-            logEvent(`${student.name} turned off phone.`);
+            logEvent(`${student.name} turned off.`);
             changed = true;
         }
     });
 
     if (changed) updateStudentList();
-}, 1000); // Watchdog runs every 1 second
+}, 1000);
 
 // --- UI Helpers ---
 function showView(sectionId) {
@@ -280,9 +294,9 @@ function setupEventListeners() {
         localStorage.setItem('theme', state.theme);
     });
 
-    // Send instant pulse when hidden to reduce lag
+    // Send instant pulse when hidden to trigger the check window
     document.addEventListener('visibilitychange', () => {
-        if (document.hidden) sendPulse();
+        if (document.hidden) sendPulse(true);
     });
 }
 
