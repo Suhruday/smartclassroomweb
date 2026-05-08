@@ -2,14 +2,14 @@
 const state = {
     currentView: 'landing-content',
     roomPin: '000000',
-    students: [], // {socketId, name, id, status, lastPulse, turnOnCount}
+    students: [], // {socketId, name, id, status, lastPulse, lastHidden, turnOnCount, hiddenPulseCount}
     userName: '',
     userId: '',
     socket: null,
     theme: localStorage.getItem('theme') || 'light',
     heartbeatInterval: null,
     wakeLock: null,
-    isJoined: false // Track if student has successfully joined
+    isJoined: false
 };
 
 const getEl = (id) => document.getElementById(id);
@@ -39,12 +39,11 @@ function startStudentHeartbeat() {
                 hidden: document.hidden
             });
         }
-    }, 3000); 
+    }, 4000); // 4s for balanced speed
 }
 
 // --- Socket Listeners ---
 function setupSocketListeners() {
-    // RECONNECT LOGIC: Ensure student re-joins room after a disconnect (like phone lock)
     state.socket.on('connect', () => {
         if (state.isJoined) {
             state.socket.emit('join-room', { 
@@ -64,9 +63,11 @@ function setupSocketListeners() {
                 socketId: data.socketId,
                 name: data.name,
                 id: data.id,
-                status: data.hidden ? 'Switched App' : 'Active',
+                status: data.hidden ? 'Active' : 'Active', // Never start in 'Switched'
                 lastPulse: Date.now(),
-                turnOnCount: 0
+                lastHidden: data.hidden,
+                turnOnCount: 0,
+                hiddenPulseCount: 0 
             };
             state.students.push(student);
             logEvent(`${student.name} connected.`);
@@ -75,19 +76,34 @@ function setupSocketListeners() {
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
             
-            const newStatus = data.hidden ? 'Switched App' : 'Active';
+            // --- LOGIC: DIFFERENTIATE LOCK VS SWITCH ---
             
-            // Immediate Status Update & Alerts
-            if (newStatus === 'Active' && oldStatus !== 'Active') {
-                student.turnOnCount++;
-                createPopupAlert(student.name, student.id, 'turned on the phone', 'red');
-                logEvent(`${student.name} returned/turned on.`);
-            } else if (newStatus === 'Switched App' && oldStatus !== 'Switched App') {
-                createPopupAlert(student.name, student.id, 'switched app', 'red');
-                playSound();
+            if (!data.hidden) {
+                // CASE 1: Student is looking at the screen (Active)
+                if (student.status !== 'Active') {
+                    student.turnOnCount++;
+                    student.status = 'Active';
+                    createPopupAlert(student.name, student.id, 'turned on the phone', 'red');
+                    logEvent(`${student.name} returned/turned on.`);
+                }
+                student.hiddenPulseCount = 0;
+            } else {
+                // CASE 2: Tab is hidden (Could be Lock or App Switch)
+                // We increment a counter. We ONLY mark as 'Switched App' if heartbeats 
+                // continue to arrive (hiddenPulseCount > 1).
+                student.hiddenPulseCount++;
+                
+                if (student.hiddenPulseCount >= 2 && student.status !== 'Switched App') {
+                    // This is definitely a Switched App because pulses ARE arriving while hidden
+                    student.status = 'Switched App';
+                    createPopupAlert(student.name, student.id, 'switched app', 'red');
+                    playSound();
+                    logEvent(`${student.name} switched app.`);
+                }
+                // If hiddenPulseCount is only 1, we WAIT. If they lock phone, no more pulses arrive.
             }
-
-            student.status = newStatus;
+            
+            student.lastHidden = data.hidden;
         }
         updateStudentList();
     });
@@ -95,11 +111,13 @@ function setupSocketListeners() {
     state.socket.on('student-offline', (data) => {
         const student = state.students.find(s => s.socketId === data.socketId);
         if (student) {
-            // Socket lost = Phone locked/off. Set to Green instantly.
+            // Socket disconnected = Phone locked. 
+            // Mark as 'Phone Off' (Green) IMMEDIATELY.
             student.status = 'Phone Off';
+            student.hiddenPulseCount = 0;
             updateStudentList();
             createPopupAlert(student.name, student.id, 'turned off the phone', 'green');
-            logEvent(`${student.name} turned off.`);
+            logEvent(`${student.name} turned off phone.`);
         }
     });
 
@@ -109,13 +127,6 @@ function setupSocketListeners() {
         showView('active-view');
         startStudentHeartbeat();
     });
-
-    state.socket.on('teacher-disconnected', () => {
-        alert('Session ended by teacher.');
-        location.reload();
-    });
-
-    state.socket.on('error-msg', (msg) => alert(msg));
 }
 
 // --- Teacher Watchdog: Handles Silent Pulse Fades ---
@@ -128,9 +139,10 @@ setInterval(() => {
         if (student.status === 'Disconnected') return;
         
         const secSincePulse = (now - student.lastPulse) / 1000;
-        // If we haven't heard anything for 10s, it's definitely Phone Off
-        if (secSincePulse > 10 && student.status !== 'Phone Off') {
+        // If pulses stop for 12s, mark as Phone Off
+        if (secSincePulse > 12 && student.status !== 'Phone Off') {
             student.status = 'Phone Off';
+            student.hiddenPulseCount = 0;
             changed = true;
         }
     });
@@ -138,7 +150,7 @@ setInterval(() => {
     if (changed) updateStudentList();
 }, 2000);
 
-// --- UI Logic ---
+// --- UI Helpers ---
 function showView(sectionId) {
     const landing = getEl('landing-content');
     const dashboards = getEl('dashboard-content');
@@ -161,7 +173,7 @@ function updateStudentList() {
 
     count.textContent = state.students.length;
     list.innerHTML = state.students.map(student => {
-        let color = '#3b82f6'; // Blue (Active)
+        let color = '#3b82f6'; // Blue
         if (student.status === 'Switched App') color = '#ef4444'; // Red
         if (student.status === 'Phone Off') color = '#10b981'; // Green
         
