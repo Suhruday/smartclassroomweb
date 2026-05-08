@@ -33,7 +33,7 @@ function startStudentHeartbeat() {
                 hidden: document.hidden
             });
         }
-    }, 5000); // 5s heartbeat
+    }, 5000); // 5s heartbeat per requirements
 }
 
 // --- Socket Listeners ---
@@ -53,14 +53,24 @@ function setupSocketListeners() {
                 turnOnCount: 0,
                 switchDuration: 0,
                 lastSwitchTime: null,
-                alertCooldown: 0,
-                lastMinuteAlert: 0
+                pendingHidden: false, // NEW: track if we just saw a hidden pulse
+                lastStatusTime: Date.now()
             };
             state.students.push(student);
-            logEvent(`${student.name} joined session.`);
+            logEvent(`${student.name} joined.`);
         } else {
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
+            
+            // LOGIC: If we get a second hidden pulse, it's definitely a Switched App
+            if (data.hidden && student.lastHidden) {
+                student.pendingHidden = false; // Confirmed switched app
+            } else if (data.hidden && !student.lastHidden) {
+                student.pendingHidden = true; // First time seen hidden, wait for next pulse
+            } else if (!data.hidden) {
+                student.pendingHidden = false;
+            }
+            
             student.lastHidden = data.hidden;
         }
         updateStudentList();
@@ -71,12 +81,12 @@ function setupSocketListeners() {
         if (student) {
             student.status = 'Disconnected';
             updateStudentList();
-            createPopupAlert(student.name, student.id, 'has disconnected', 'gray');
+            createPopupAlert(student.name, student.id, 'went offline', 'gray');
         }
     });
 
     state.socket.on('joined-success', (data) => {
-        getEl('active-status-text').textContent = `Focus Shield Active (Session #${data.pin})`;
+        getEl('active-status-text').textContent = `Focus Guard Active (Session #${data.pin})`;
         showView('active-view');
         startStudentHeartbeat();
     });
@@ -94,58 +104,63 @@ setInterval(() => {
         const secSincePulse = (now - student.lastPulse) / 1000;
         let nextStatus = student.status;
 
-        // 1. Detection Logic
+        // 1. Rule A: Phone Locked (Silence Detection)
+        // If NO pulse for 15s, it is ALWAYS a Phone Lock (Green)
         if (secSincePulse > 15) {
             nextStatus = 'Phone Off';
-        } else if (student.lastHidden) {
-            nextStatus = 'Switched App';
-        } else {
+        } 
+        // 2. Rule B: Switched App (Active Pulse but Hidden)
+        // Only trigger if we've seen multiple hidden pulses OR it's been hidden for a bit but still pulsing
+        else if (student.lastHidden && secSincePulse < 12) {
+            // If we are still getting pulses (secSincePulse is low) but it's hidden
+            // AND it's not the very first pulse (pendingHidden logic in socket listener)
+            if (!student.pendingHidden) {
+                nextStatus = 'Switched App';
+            } else {
+                // We are in the "Wait and See" window (between 0-15s of the first hidden pulse)
+                // Keep the current status for now to avoid false positives
+                nextStatus = student.status;
+            }
+        } 
+        // 3. Rule C: Active (Visible & Pulsing)
+        else if (!student.lastHidden && secSincePulse < 10) {
             nextStatus = 'Active';
         }
 
-        // 2. State Change Handling
+        // 4. Handle State Change Alerts
         if (nextStatus !== student.status) {
             const oldStatus = student.status;
-            student.status = nextStatus;
-            listChanged = true;
-
-            // --- Alerts & Metrics ---
+            
+            // PRIORITY: Phone Off is GREEN
             if (nextStatus === 'Phone Off') {
                 createPopupAlert(student.name, student.id, 'turned off the phone', 'green');
                 logEvent(`${student.name} turned off phone.`);
             } 
+            // PRIORITY: Switched App is RED
             else if (nextStatus === 'Switched App') {
                 student.lastSwitchTime = now;
                 createPopupAlert(student.name, student.id, 'switched app', 'red');
                 playSound('alert');
-                sendNotification('Focus Violation', `${student.name} switched app.`);
             } 
+            // PRIORITY: Returned is RED Alert + Increment Count
             else if (nextStatus === 'Active' && (oldStatus === 'Phone Off' || oldStatus === 'Switched App')) {
                 student.turnOnCount++;
-                createPopupAlert(student.name, student.id, `turned on the phone. Count: ${student.turnOnCount}`, 'red');
+                createPopupAlert(student.name, student.id, 'turned on the phone', 'red');
                 logEvent(`${student.name} turned on phone (${student.turnOnCount}).`);
                 
-                // Clear switch duration logic
                 if (oldStatus === 'Switched App' && student.lastSwitchTime) {
                     student.switchDuration += Math.round((now - student.lastSwitchTime) / 1000);
                     student.lastSwitchTime = null;
                 }
             }
+
+            student.status = nextStatus;
+            student.lastStatusTime = now;
+            listChanged = true;
         }
 
-        // 3. Persistent "Outside App" Tracker
-        if (student.status === 'Switched App' && student.lastSwitchTime) {
-            const durationOutside = Math.round((now - student.lastSwitchTime) / 1000);
-            
-            // Repeated Alert every 1 minute
-            if (durationOutside >= 60 && (now - student.lastMinuteAlert > 60000)) {
-                const mins = Math.floor(durationOutside / 60);
-                createPopupAlert(student.name, student.id, `has been outside the app for ${mins} minute(s)`, 'red');
-                student.lastMinuteAlert = now;
-                playSound('alert');
-            }
-            listChanged = true; // To update the live timer in the list
-        }
+        // Live timer for switched duration
+        if (student.status === 'Switched App') listChanged = true;
     });
 
     if (listChanged) updateStudentList();
@@ -190,15 +205,11 @@ function updateStudentList() {
             <li class="student-item-large">
                 <div class="student-main-info">
                     <span class="student-name">${student.name}</span>
-                    <span class="student-id">ID: ${student.id}</span>
+                    <span class="student-id">Turned On Count: ${student.turnOnCount}</span>
                 </div>
                 <div class="student-metrics">
                     <div class="metric">
-                        <span class="m-label">Turned On:</span>
-                        <span class="m-value">${student.turnOnCount}</span>
-                    </div>
-                    <div class="metric">
-                        <span class="m-label">Outside App:</span>
+                        <span class="m-label">Outside:</span>
                         <span class="m-value">${totalSwitchTime}s</span>
                     </div>
                 </div>
@@ -223,7 +234,7 @@ function createPopupAlert(name, id, message, colorType) {
     toast.style.borderLeft = `5px solid ${hexColor}`;
     toast.innerHTML = `
         <div class="alert-content">
-            <h4>${name} (${id})</h4>
+            <h4>${name}</h4>
             <p class="alert-status" style="color: ${hexColor}">${message}</p>
         </div>
     `;
@@ -244,19 +255,13 @@ function logEvent(msg) {
     log.prepend(entry);
 }
 
-function sendNotification(title, body) {
-    if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
-        new Notification(title, { body, icon: '/favicon.ico' });
-    }
-}
-
 function playSound(type) {
     try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(type === 'alert' ? 440 : 880, audioCtx.currentTime);
+        osc.frequency.setValueAtTime(440, audioCtx.currentTime);
         gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
         osc.connect(gain);
         gain.connect(audioCtx.destination);
