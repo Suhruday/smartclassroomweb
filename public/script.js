@@ -2,7 +2,7 @@
 const state = {
     currentView: 'landing-content',
     roomPin: '000000',
-    students: [], // {socketId, name, id, status, lastPulse, lastHidden, turnOnCount, switchDuration, lastSwitchTime, offlineTimeout}
+    students: [], // {socketId, name, id, status, lastPulse, lastHidden, turnOnCount, switchDuration, lastSwitchTime, firstHiddenTime}
     userName: '',
     userId: '',
     socket: null,
@@ -15,7 +15,6 @@ const getEl = (id) => document.getElementById(id);
 
 // Initialization
 document.addEventListener('DOMContentLoaded', () => {
-    // Socket.io with aggressive reconnection
     state.socket = io(window.location.origin, {
         reconnection: true,
         reconnectionDelay: 1000,
@@ -59,12 +58,12 @@ function setupSocketListeners() {
                 turnOnCount: 0,
                 switchDuration: 0,
                 lastSwitchTime: null,
+                firstHiddenTime: null,
                 offlineTimeout: null
             };
             state.students.push(student);
             logEvent(`${student.name} joined.`);
         } else {
-            // Student is back (reconnected or pulse arrived)
             if (student.offlineTimeout) {
                 clearTimeout(student.offlineTimeout);
                 student.offlineTimeout = null;
@@ -72,6 +71,19 @@ function setupSocketListeners() {
             
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
+            
+            // --- CRITICAL FIX: IMMEDIATE UNLOCK DETECTION ---
+            if (!data.hidden && (student.status === 'Phone Off' || student.status === 'Switched App')) {
+                handleStudentReturn(student);
+            }
+
+            // Track when it first became hidden
+            if (data.hidden && !student.lastHidden) {
+                student.firstHiddenTime = Date.now();
+            } else if (!data.hidden) {
+                student.firstHiddenTime = null;
+            }
+
             student.lastHidden = data.hidden;
         }
         updateStudentList();
@@ -80,28 +92,44 @@ function setupSocketListeners() {
     state.socket.on('student-offline', (data) => {
         const student = state.students.find(s => s.socketId === data.socketId);
         if (student) {
-            // DO NOT DISCONNECT IMMEDIATELY
-            // When phone locks, the socket often closes. Treat this as "Phone Off" (Green)
-            student.status = 'Phone Off';
+            // Socket disconnected = Phone Locked or Closed
+            // Set to Phone Off (Green) immediately
+            if (student.status !== 'Switched App') {
+                student.status = 'Phone Off';
+            }
             updateStudentList();
 
-            // Only remove student if they don't reconnect within 10 minutes
             if (student.offlineTimeout) clearTimeout(student.offlineTimeout);
             student.offlineTimeout = setTimeout(() => {
-                if (student.status === 'Phone Off' || student.status === 'Disconnected') {
+                if (student.status === 'Phone Off') {
                     student.status = 'Disconnected';
                     updateStudentList();
-                    createPopupAlert(student.name, student.id, 'left the session', 'gray');
                 }
-            }, 600000); // 10 minute grace period
+            }, 600000); 
         }
     });
 
     state.socket.on('joined-success', (data) => {
-        getEl('active-status-text').textContent = `Focus Shield Active (Session #${data.pin})`;
+        getEl('active-status-text').textContent = `Focus Guard Active (Session #${data.pin})`;
         showView('active-view');
         startStudentHeartbeat();
     });
+}
+
+function handleStudentReturn(student) {
+    const oldStatus = student.status;
+    student.status = 'Active';
+    student.turnOnCount++;
+    student.firstHiddenTime = null;
+    
+    createPopupAlert(student.name, student.id, 'turned on the phone', 'red');
+    logEvent(`${student.name} turned on phone (${student.turnOnCount}).`);
+    
+    if (oldStatus === 'Switched App' && student.lastSwitchTime) {
+        student.switchDuration += Math.round((Date.now() - student.lastSwitchTime) / 1000);
+        student.lastSwitchTime = null;
+    }
+    updateStudentList();
 }
 
 // --- Teacher Dashboard Brain (Detection & Alerts) ---
@@ -116,19 +144,24 @@ setInterval(() => {
         const secSincePulse = (now - student.lastPulse) / 1000;
         let nextStatus = student.status;
 
-        // --- THE "WAIT AND SEE" LOGIC ---
-        // This prevents the "Switched App" flicker during phone lock.
+        // --- IMPROVED LOGIC: PHONE LOCK VS SWITCH ---
         
         if (secSincePulse > 15) {
-            // Heartbeat stopped = Phone is locked/off.
+            // Heartbeat stopped completely = Screen Locked
             nextStatus = 'Phone Off';
-        } else if (student.lastHidden) {
-            // If tab is hidden BUT pulses are still coming (secSincePulse < 10)
-            // Wait at least 10s of hidden pulses before accusing of switching app
-            if (secSincePulse < 10) {
+            student.firstHiddenTime = null;
+        } 
+        else if (student.lastHidden) {
+            // If tab is hidden BUT we are still getting pulses (secSincePulse < 10)
+            // AND they have been hidden for more than 12 seconds continuously
+            if (student.firstHiddenTime && (now - student.firstHiddenTime > 12000)) {
                 nextStatus = 'Switched App';
+            } else {
+                // In the grace period - wait to see if heartbeats stop
+                // Do NOT change status to Switched App yet
             }
-        } else {
+        } 
+        else {
             nextStatus = 'Active';
         }
 
@@ -136,31 +169,16 @@ setInterval(() => {
         if (nextStatus !== student.status) {
             const oldStatus = student.status;
             
-            // PRIORITY 1: Lock Detection (Always Green)
             if (nextStatus === 'Phone Off') {
                 createPopupAlert(student.name, student.id, 'turned off the phone', 'green');
                 logEvent(`${student.name} turned off phone.`);
             } 
-            // PRIORITY 2: Switched App (Red)
             else if (nextStatus === 'Switched App') {
-                // Only alert if we haven't already marked them as switched
-                if (oldStatus !== 'Switched App') {
-                    student.lastSwitchTime = now;
-                    createPopupAlert(student.name, student.id, 'switched app', 'red');
-                    playSound('alert');
-                }
+                student.lastSwitchTime = now;
+                createPopupAlert(student.name, student.id, 'switched app', 'red');
+                playSound('alert');
             } 
-            // PRIORITY 3: Return (Red Alert + Metrics)
-            else if (nextStatus === 'Active' && (oldStatus === 'Phone Off' || oldStatus === 'Switched App')) {
-                student.turnOnCount++;
-                createPopupAlert(student.name, student.id, 'turned on the phone', 'red');
-                logEvent(`${student.name} turned on phone (${student.turnOnCount}).`);
-                
-                if (oldStatus === 'Switched App' && student.lastSwitchTime) {
-                    student.switchDuration += Math.round((now - student.lastSwitchTime) / 1000);
-                    student.lastSwitchTime = null;
-                }
-            }
+            // Note: Return (Active) is handled instantly in the socket listener for speed
 
             student.status = nextStatus;
             listChanged = true;
