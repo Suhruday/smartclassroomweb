@@ -2,14 +2,13 @@
 const state = {
     currentView: 'landing-content',
     roomPin: '000000',
-    students: [], // {socketId, name, id, status, lastPulse, lastHidden, lastChange, alertCooldown}
+    students: [], // {socketId, name, id, status, lastPulse, lastHidden, alertCooldown}
     userName: '',
     userId: '',
     socket: null,
     theme: localStorage.getItem('theme') || 'light',
     heartbeatInterval: null,
     wakeLock: null,
-    soundEnabled: true,
     lastInteraction: Date.now()
 };
 
@@ -17,57 +16,42 @@ const getEl = (id) => document.getElementById(id);
 
 // Initialization
 document.addEventListener('DOMContentLoaded', () => {
-    state.socket = io(window.location.origin, {
-        reconnection: true,
-        reconnectionDelay: 1000
-    });
-
+    state.socket = io(window.location.origin);
     document.documentElement.setAttribute('data-theme', state.theme);
     if (window.lucide) lucide.createIcons();
 
     setupEventListeners();
     setupSocketListeners();
-    setupStudentActivity();
+    setupMobileResilience();
 });
 
-// --- Student Activity Monitoring ---
-function setupStudentActivity() {
-    const reportVisibility = () => {
-        if (state.currentView === 'active-view') {
-            state.socket.emit('visibility-status', { 
-                pin: state.roomPin, 
-                hidden: document.hidden 
-            });
-        }
-    };
-    document.addEventListener('visibilitychange', reportVisibility);
-    window.addEventListener('focus', reportVisibility);
-    window.addEventListener('blur', reportVisibility);
-
-    // Interaction tracking
-    ['mousemove', 'keydown', 'click', 'touchstart'].forEach(evt => {
-        window.addEventListener(evt, () => {
-            state.lastInteraction = Date.now();
-        }, { passive: true });
-    });
-}
-
-function startHeartbeat() {
+// --- Student: High-Resilience Heartbeat ---
+function startStudentHeartbeat() {
     if (state.heartbeatInterval) clearInterval(state.heartbeatInterval);
     state.heartbeatInterval = setInterval(() => {
         if (state.socket && state.socket.connected) {
             state.socket.emit('heartbeat', {
                 pin: state.roomPin,
                 hidden: document.hidden,
-                idle: (Date.now() - state.lastInteraction > 60000)
+                focused: document.hasFocus()
             });
         }
-    }, 5000); // 5s heartbeat
+    }, 4000); // 4s interval is optimal for mobile background stability
+}
+
+function setupMobileResilience() {
+    const report = () => {
+        if (state.currentView === 'active-view' && state.socket) {
+            state.socket.emit('visibility-status', { pin: state.roomPin, hidden: document.hidden });
+        }
+    };
+    document.addEventListener('visibilitychange', report);
+    window.addEventListener('pagehide', report);
 }
 
 // --- Socket Listeners ---
 function setupSocketListeners() {
-    // Teacher: Receive student updates
+    // Teacher: Process Incoming Signals
     state.socket.on('student-pulse', (data) => {
         if (state.currentView !== 'teacher-view') return;
         
@@ -80,115 +64,99 @@ function setupSocketListeners() {
                 status: 'Active',
                 lastPulse: Date.now(),
                 lastHidden: data.hidden,
-                lastChange: Date.now(),
                 alertCooldown: 0
             };
             state.students.push(student);
-            createPopupAlert(student.name, student.id, 'JOINED');
-            playSound('join');
+            logEvent(`${student.name} joined the session.`);
+            sendNotification('New Student Joined', `${student.name} is now connected.`);
         } else {
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
             student.lastHidden = data.hidden;
-            student.idle = data.idle;
         }
         updateStudentList();
-    });
-
-    state.socket.on('student-visibility-update', (data) => {
-        const student = state.students.find(s => s.socketId === data.socketId);
-        if (student) {
-            student.lastHidden = data.hidden;
-            student.lastPulse = Date.now();
-            // Fast detection handled by monitor loop
-        }
     });
 
     state.socket.on('student-offline', (data) => {
         const student = state.students.find(s => s.socketId === data.socketId);
         if (student) {
-            student.status = 'Offline';
-            student.lastChange = Date.now();
+            student.status = 'Disconnected';
             updateStudentList();
-            createPopupAlert(student.name, student.id, 'OFFLINE');
-            playSound('alert');
+            logEvent(`${student.name} has disconnected.`);
+            sendNotification('Student Disconnected', `${student.name} lost connection.`);
         }
     });
 
-    // Student: Joined success
+    // Student: Success
     state.socket.on('joined-success', (data) => {
-        getEl('active-status-text').textContent = `Focus Guard Active (Session #${data.pin})`;
+        getEl('active-status-text').textContent = `Focus Shield Active (Session #${data.pin})`;
         showView('active-view');
-        startHeartbeat();
+        startStudentHeartbeat();
     });
 
-    state.socket.on('teacher-disconnected', () => {
-        alert('Teacher ended the session.');
-        location.reload();
-    });
+    state.socket.on('error-msg', (msg) => alert(msg));
 }
 
-// --- Teacher Monitor Loop (The Intelligent Brain) ---
+// --- Teacher Dashboard Brain (Detection & Alerts) ---
 setInterval(() => {
     if (state.currentView !== 'teacher-view') return;
     const now = Date.now();
-    let changed = false;
+    let listChanged = false;
 
     state.students.forEach(student => {
-        if (student.status === 'Offline') return;
+        if (student.status === 'Disconnected') return;
 
         const secSincePulse = (now - student.lastPulse) / 1000;
-        let newStatus = student.status;
+        let nextStatus = student.status;
 
-        // 1. Check for Disconnection (No pulse for 15s)
-        if (secSincePulse > 15) {
-            newStatus = 'Screen Locked'; 
-        } 
-        // 2. Check for App Switching (Pulse IS fresh, but hidden)
-        else if (student.lastHidden && secSincePulse <= 8) {
-            // Debounce: Wait at least 8s before confirming background app
-            // This prevents false positives during phone locks
-            if (now - student.lastPulse < 2000) { // If pings are still arriving while hidden
-                 newStatus = 'Background App';
-            }
-        }
-        // 3. Check for Idle
-        else if (student.idle) {
-            newStatus = 'Idle';
-        }
-        // 4. Back to Active
-        else if (!student.lastHidden && secSincePulse < 10) {
-            newStatus = 'Active';
+        // 1. Detection Logic
+        if (secSincePulse > 12) {
+            // Heartbeat fully stopped = Screen Locked or Phone Off
+            nextStatus = 'Screen Locked';
+        } else if (student.lastHidden) {
+            // Heartbeat is still arriving but tab is hidden = Switched App
+            nextStatus = 'Switched App';
+        } else {
+            nextStatus = 'Active';
         }
 
-        // Apply state change with debounce
-        if (newStatus !== student.status) {
-            // Only update if it's been in this state for a moment (prevent flicker)
-            student.status = newStatus;
-            student.lastChange = now;
-            changed = true;
-            
-            // Trigger alerts for major switches
-            if (now - student.alertCooldown > 10000) { // 10s alert cooldown per student
-                if (newStatus === 'Background App') {
-                    createPopupAlert(student.name, student.id, 'SWITCHED');
-                    playSound('alert');
-                } else if (newStatus === 'Active') {
-                    createPopupAlert(student.name, student.id, 'OPENED');
+        // 2. Alert Management
+        if (nextStatus !== student.status) {
+            const oldStatus = student.status;
+            student.status = nextStatus;
+            listChanged = true;
+
+            // Only notify if status changed significantly and not spamming (10s cooldown)
+            if (now - student.alertCooldown > 10000) {
+                if (nextStatus === 'Switched App') {
+                    triggerViolation(student, 'switched to another app');
+                } else if (nextStatus === 'Screen Locked' && oldStatus === 'Active') {
+                    logEvent(`${student.name} locked their phone.`);
+                } else if (nextStatus === 'Active' && (oldStatus === 'Switched App' || oldStatus === 'Screen Locked')) {
+                    triggerViolation(student, 'returned to class', 'green');
                 }
                 student.alertCooldown = now;
             }
         }
     });
 
-    if (changed) updateStudentList();
+    if (listChanged) updateStudentList();
 }, 2000);
 
-// --- UI Logic ---
+function triggerViolation(student, message, color = 'red') {
+    createPopupAlert(student.name, student.id, message, color);
+    logEvent(`${student.name} ${message}`);
+    
+    if (color === 'red') {
+        sendNotification('Focus Violation', `${student.name} ${message}`);
+        playSound('alert');
+    }
+}
+
+// --- View & UI Helpers ---
 function showView(sectionId) {
     const landing = getEl('landing-content');
     const dashboards = getEl('dashboard-content');
-    
     if (sectionId === 'landing-content') {
         landing?.classList.remove('hidden');
         dashboards?.classList.add('hidden');
@@ -196,7 +164,6 @@ function showView(sectionId) {
         landing?.classList.add('hidden');
         dashboards?.classList.remove('hidden');
     }
-
     document.querySelectorAll('.dashboard-section').forEach(s => s.classList.add('hidden'));
     getEl(sectionId)?.classList.remove('hidden');
     state.currentView = sectionId;
@@ -209,45 +176,34 @@ function updateStudentList() {
 
     count.textContent = state.students.length;
     list.innerHTML = state.students.map(student => {
-        const timeStr = new Date(student.lastPulse).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        let color = '#10b981'; // Green
-        if (student.status === 'Background App' || student.status === 'Screen Locked') color = '#f59e0b'; // Yellow
-        if (student.status === 'Offline') color = '#64748b'; // Gray
+        let color = '#10b981'; // Active
+        if (student.status === 'Switched App') color = '#ef4444'; // Violation
+        if (student.status === 'Screen Locked') color = '#f59e0b'; // Warn
+        if (student.status === 'Disconnected') color = '#64748b'; // Off
 
         return `
             <li>
                 <div class="student-info">
                     <span class="student-name">${student.name}</span>
-                    <span class="student-id">Last Pulse: ${timeStr}</span>
+                    <span class="student-id">${student.status}</span>
                 </div>
-                <span class="status-badge" style="color: ${color}; background: ${color}1A">
-                    ${student.status}
-                </span>
+                <div class="status-indicator" style="background: ${color}"></div>
             </li>
         `;
     }).join('');
 }
 
-function createPopupAlert(name, id, type) {
-    if (state.currentView !== 'teacher-view') return;
+function createPopupAlert(name, id, message, color) {
     const container = getEl('alert-container');
     if (!container) return;
-
-    const config = {
-        JOINED: { text: 'joined session', color: 'green', icon: 'user-plus' },
-        OPENED: { text: 'returned to class', color: 'green', icon: 'zap' },
-        SWITCHED: { text: 'switched app', color: 'red', icon: 'layers' },
-        OFFLINE: { text: 'went offline', color: 'red', icon: 'wifi-off' }
-    };
-    const c = config[type] || config.JOINED;
 
     const toast = document.createElement('div');
     toast.className = `alert-toast opened`;
     toast.innerHTML = `
-        <div class="alert-icon"><i data-lucide="${c.icon}"></i></div>
+        <div class="alert-icon"><i data-lucide="${color === 'red' ? 'layers' : 'zap'}"></i></div>
         <div class="alert-content">
             <h4>${name}</h4>
-            <p class="alert-status ${c.color}">${c.text}</p>
+            <p class="alert-status ${color}">${message}</p>
         </div>
     `;
     container.appendChild(toast);
@@ -258,32 +214,51 @@ function createPopupAlert(name, id, type) {
     }, 5000);
 }
 
-// Sound Helper
+function logEvent(msg) {
+    const log = getEl('event-log');
+    if (!log) return;
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.innerHTML = `<span class="log-time">[${time}]</span> ${msg}`;
+    log.prepend(entry);
+    if (log.children.length > 50) log.lastChild.remove();
+}
+
+// --- Notifications & Sound ---
+function requestPermissions() {
+    if ("Notification" in window) Notification.requestPermission();
+}
+
+function sendNotification(title, body) {
+    if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
+        new Notification(title, { body, icon: '/favicon.ico' });
+    }
+}
+
 function playSound(type) {
-    if (!state.soundEnabled) return;
     try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioCtx.createOscillator();
-        const gainNode = audioCtx.createGain();
-
-        oscillator.type = type === 'join' ? 'sine' : 'triangle';
-        oscillator.frequency.setValueAtTime(type === 'join' ? 880 : 440, audioCtx.currentTime);
-        gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-
-        oscillator.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-
-        oscillator.start();
-        oscillator.stop(audioCtx.currentTime + 0.1);
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(type === 'alert' ? 440 : 880, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.1);
     } catch (e) {}
 }
 
+// --- Setup ---
 function setupEventListeners() {
     const tBtns = [getEl('hero-btn-teacher'), getEl('nav-btn-teacher')];
     tBtns.forEach(b => b?.addEventListener('click', () => {
         generatePin();
         showView('teacher-view');
         state.socket.emit('create-room', state.roomPin);
+        requestPermissions();
         requestWakeLock();
     }));
 
