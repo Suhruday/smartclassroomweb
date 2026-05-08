@@ -33,16 +33,15 @@ document.addEventListener('DOMContentLoaded', () => {
 function startStudentHeartbeat() {
     if (state.heartbeatInterval) clearInterval(state.heartbeatInterval);
     state.heartbeatInterval = setInterval(() => {
-        sendPulse(false); // Periodic heartbeat
-    }, 3000); 
+        sendPulse(); // Periodic heartbeat
+    }, 2000); // Super fast (2s) for instant detection
 }
 
-function sendPulse(isInstant = false) {
+function sendPulse() {
     if (state.socket && state.socket.connected && state.isJoined) {
         state.socket.emit('heartbeat', {
             pin: state.roomPin,
-            hidden: document.hidden,
-            isInstant: isInstant
+            hidden: document.hidden
         });
     }
 }
@@ -74,7 +73,6 @@ function setupSocketListeners() {
             state.students.push(student);
             logEvent(`${student.name} joined.`);
         } else {
-            const oldStatus = student.status;
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
             
@@ -95,16 +93,13 @@ function setupSocketListeners() {
                     student.hiddenPulseCount = 0;
                 }
                 
-                // Only count REGULAR heartbeats while hidden
-                if (!data.isInstant) {
-                    student.hiddenPulseCount++;
-                }
+                student.hiddenPulseCount++;
 
-                // --- ROBUST SWITCH DETECTION ---
-                // We need at least 3 regular heartbeats (9 seconds) to confirm a switch.
-                // This prevents the 'Switched App' flicker during a 1-2 second lock delay.
+                // --- ROBUST SWITCH DETECTION (9 SECONDS OF PROOF) ---
+                // Only mark as Switched if we get 4+ pulses while hidden.
+                // If it's a lock, heartbeats usually stop after 1 or 2.
                 if (student.status !== 'Switched App' && student.status !== 'Phone Off') {
-                    if (student.hiddenPulseCount >= 3) {
+                    if (student.hiddenPulseCount >= 4) {
                         student.status = 'Switched App';
                         triggerAlert(student, 'switched app', 'red', true);
                         logEvent(`${student.name} switched app.`);
@@ -119,7 +114,6 @@ function setupSocketListeners() {
     state.socket.on('student-offline', (data) => {
         const student = state.students.find(s => s.socketId === data.socketId);
         if (student) {
-            // Socket drop = Instant Green
             if (student.status !== 'Phone Off') {
                 student.status = 'Phone Off';
                 student.firstHiddenTime = null;
@@ -156,14 +150,14 @@ setInterval(() => {
         if (student.status === 'Disconnected') return;
         const secSincePulse = (now - student.lastPulse) / 1000;
         
-        // If silence for 5 seconds, it's definitely Phone Off.
-        // We use 5s because heartbeats happen every 3s.
-        if (secSincePulse > 5 && student.status !== 'Phone Off') {
+        // --- THE FIX: ULTRA STRICT TIMEOUT ---
+        // Heartbeats are every 2s. If silent for 4s, the phone is LOCKED.
+        if (secSincePulse > 4 && student.status !== 'Phone Off') {
             student.status = 'Phone Off';
             student.firstHiddenTime = null;
             student.hiddenPulseCount = 0;
             triggerAlert(student, 'turned off the phone', 'green');
-            logEvent(`${student.name} turned off phone.`);
+            logEvent(`${student.name} turned off.`);
             changed = true;
         }
     });
@@ -292,11 +286,6 @@ function setupEventListeners() {
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         document.documentElement.setAttribute('data-theme', state.theme);
         localStorage.setItem('theme', state.theme);
-    });
-
-    // Send instant pulse when hidden to verify the lock
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden) sendPulse(true);
     });
 }
 
