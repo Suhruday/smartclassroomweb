@@ -6,128 +6,66 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
-    }
+    cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
 const PORT = process.env.PORT || 3000;
-
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Store rooms and their current states
 const rooms = {};
 
 io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
-
-    // --- Teacher: Create Room ---
+    // Teacher: Create
     socket.on('create-room', (pin) => {
-        rooms[pin] = {
-            teacherId: socket.id,
-            students: {}
-        };
+        rooms[pin] = { teacherId: socket.id, students: {} };
         socket.join(pin);
-        console.log(`Room ${pin} created by teacher ${socket.id}`);
     });
 
-    // --- Student: Join Room ---
+    // Student: Join
     socket.on('join-room', ({ pin, name, id }) => {
-        if (!rooms[pin]) {
-            return socket.emit('error-msg', 'Room not found.');
-        }
-
-        // Register student in the room object
-        rooms[pin].students[socket.id] = { name, id, status: 'Active' };
+        if (!rooms[pin]) return socket.emit('error-msg', 'Room not found.');
+        rooms[pin].students[socket.id] = { name, id };
         socket.join(pin);
-        
-        // Notify Teacher
-        io.to(rooms[pin].teacherId).emit('student-status-broadcast', {
-            socketId: socket.id,
-            name,
-            id,
-            status: 'Active'
+        io.to(rooms[pin].teacherId).emit('student-pulse', {
+            socketId: socket.id, name, id, hidden: false, idle: false
         });
-
         socket.emit('joined-success', { pin });
-        console.log(`Student ${name} joined room ${pin}`);
     });
 
-    // --- Activity & Status Updates ---
-    socket.on('status-update', ({ pin, status }) => {
-        if (rooms[pin] && rooms[pin].students[socket.id]) {
+    // Activity Updates
+    socket.on('heartbeat', ({ pin, hidden, idle }) => {
+        if (rooms[pin]) {
             const student = rooms[pin].students[socket.id];
-            student.status = status;
+            if (student) {
+                io.to(rooms[pin].teacherId).emit('student-pulse', {
+                    socketId: socket.id,
+                    name: student.name,
+                    id: student.id,
+                    hidden,
+                    idle
+                });
+            }
+        }
+    });
 
-            // Broadcast to teacher
-            io.to(rooms[pin].teacherId).emit('student-status-broadcast', {
+    socket.on('visibility-status', ({ pin, hidden }) => {
+        if (rooms[pin]) {
+            io.to(rooms[pin].teacherId).emit('student-visibility-update', {
                 socketId: socket.id,
-                name: student.name,
-                id: student.id,
-                status: status
+                hidden
             });
         }
     });
 
-    // --- Heartbeat Logic ---
-    socket.on('heartbeat', ({ pin, status }) => {
-        if (rooms[pin] && rooms[pin].students[socket.id]) {
-            const student = rooms[pin].students[socket.id];
-            
-            // Keep heartbeat simple, just forward status to teacher to verify life
-            io.to(rooms[pin].teacherId).emit('student-status-broadcast', {
-                socketId: socket.id,
-                name: student.name,
-                id: student.id,
-                status: status
-            });
-        }
-    });
-
-    // --- Visibility Change (Legacy support for fast detection) ---
-    socket.on('visibility-change', ({ pin, hidden }) => {
-        if (rooms[pin] && rooms[pin].students[socket.id]) {
-            const student = rooms[pin].students[socket.id];
-            const newStatus = hidden ? 'Background' : 'Active';
-            student.status = newStatus;
-
-            io.to(rooms[pin].teacherId).emit('student-status-broadcast', {
-                socketId: socket.id,
-                name: student.name,
-                id: student.id,
-                status: newStatus
-            });
-        }
-    });
-
-    socket.on('student-resumed', ({ pin }) => {
-        if (rooms[pin] && rooms[pin].students[socket.id]) {
-            const student = rooms[pin].students[socket.id];
-            student.status = 'Active';
-
-            io.to(rooms[pin].teacherId).emit('student-status-broadcast', {
-                socketId: socket.id,
-                name: student.name,
-                id: student.id,
-                status: 'Active'
-            });
-        }
-    });
-
-    // --- Disconnect Logic ---
     socket.on('disconnect', () => {
-        // Clean up if it was a teacher
         for (const pin in rooms) {
             if (rooms[pin].teacherId === socket.id) {
                 io.to(pin).emit('teacher-disconnected');
                 delete rooms[pin];
                 break;
             }
-
-            // Notify if it was a student
             if (rooms[pin].students[socket.id]) {
-                io.to(rooms[pin].teacherId).emit('student-disconnected', {
+                io.to(rooms[pin].teacherId).emit('student-offline', {
                     socketId: socket.id
                 });
                 delete rooms[pin].students[socket.id];
@@ -137,4 +75,4 @@ io.on('connection', (socket) => {
     });
 });
 
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server on ${PORT}`));

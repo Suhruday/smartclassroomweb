@@ -2,213 +2,189 @@
 const state = {
     currentView: 'landing-content',
     roomPin: '000000',
-    students: [], // Array of {socketId, name, id, status, lastPulse, lastHidden, lastInteraction}
+    students: [], // {socketId, name, id, status, lastPulse, lastHidden, lastChange, alertCooldown}
     userName: '',
     userId: '',
     socket: null,
     theme: localStorage.getItem('theme') || 'light',
     heartbeatInterval: null,
     wakeLock: null,
-    lastInteraction: Date.now(),
-    localStatus: 'Active' // Active, Idle, Background
+    soundEnabled: true,
+    lastInteraction: Date.now()
 };
 
-// Defensive DOM Element Selection
 const getEl = (id) => document.getElementById(id);
 
 // Initialization
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('SmartClass Focus Engine initializing...');
-    
-    // Initialize Socket.IO
     state.socket = io(window.location.origin, {
         reconnection: true,
-        reconnectionDelay: 1000,
-        reconnectionAttempts: Infinity
+        reconnectionDelay: 1000
     });
 
-    // Theme Setup
     document.documentElement.setAttribute('data-theme', state.theme);
     if (window.lucide) lucide.createIcons();
 
     setupEventListeners();
     setupSocketListeners();
-    setupActivityDetection();
+    setupStudentActivity();
 });
 
-// --- Focus & Activity Detection Logic ---
-function setupActivityDetection() {
-    // 1. Visibility API
-    document.addEventListener('visibilitychange', () => {
-        updateLocalStatus();
-    });
-
-    // 2. Window Focus/Blur (More sensitive than visibility)
-    window.addEventListener('focus', () => updateLocalStatus());
-    window.addEventListener('blur', () => updateLocalStatus());
-
-    // 3. Interaction tracking for "Idle" status
-    const recordInteraction = () => {
-        state.lastInteraction = Date.now();
-        if (state.localStatus === 'Idle') updateLocalStatus();
-    };
-
-    ['mousemove', 'keydown', 'click', 'touchstart'].forEach(evt => {
-        window.addEventListener(evt, recordInteraction, { passive: true });
-    });
-
-    // 4. Online/Offline detection
-    window.addEventListener('online', () => updateLocalStatus());
-    window.addEventListener('offline', () => {
-        state.localStatus = 'Disconnected';
-        broadcastStatus();
-    });
-
-    // Idle Check Interval
-    setInterval(() => {
-        if (state.localStatus === 'Active' && (Date.now() - state.lastInteraction > 60000)) { // 1 min idle
-            state.localStatus = 'Idle';
-            broadcastStatus();
-        }
-    }, 10000);
-}
-
-function updateLocalStatus() {
-    let newStatus = 'Active';
-
-    if (document.hidden) {
-        newStatus = 'Background';
-    } else if (!document.hasFocus()) {
-        newStatus = 'Background'; // Switched tab or split screen
-    } else if (Date.now() - state.lastInteraction > 60000) {
-        newStatus = 'Idle';
-    }
-
-    if (newStatus !== state.localStatus) {
-        state.localStatus = newStatus;
-        broadcastStatus();
-    }
-}
-
-function broadcastStatus() {
-    if (state.socket && state.currentView === 'active-view') {
-        state.socket.emit('status-update', {
-            pin: state.roomPin,
-            status: state.localStatus,
-            timestamp: Date.now()
-        });
-    }
-}
-
-// --- Socket Listeners ---
-function setupSocketListeners() {
-    // Teacher Side Updates
-    state.socket.on('student-status-broadcast', (data) => {
-        if (state.currentView !== 'teacher-view') return;
-        
-        let student = state.students.find(s => s.id === data.id);
-        if (student) {
-            const oldStatus = student.status;
-            student.socketId = data.socketId;
-            student.status = data.status;
-            student.lastPulse = Date.now();
-            
-            if (oldStatus !== data.status) {
-                updateStudentList();
-                handleStatusAlert(student, data.status);
-            }
-        } else {
-            // New Student
-            state.students.push({
-                socketId: data.socketId,
-                name: data.name,
-                id: data.id,
-                status: data.status,
-                lastPulse: Date.now(),
-                lastAlertTime: 0
-            });
-            updateStudentList();
-            createPopupAlert(data.name, data.id, 'JOINED');
-        }
-    });
-
-    state.socket.on('student-disconnected', (data) => {
-        const student = state.students.find(s => s.socketId === data.socketId);
-        if (student) {
-            student.status = 'Disconnected';
-            updateStudentList();
-            // 30s delay before full cleanup
-            setTimeout(() => {
-                if (student.status === 'Disconnected') {
-                    // student.status = 'Offline'; // Could remove here
-                    updateStudentList();
-                }
-            }, 30000);
-        }
-    });
-
-    // Student Side Updates
-    state.socket.on('joined-success', (data) => {
-        getEl('active-status-text').textContent = `Focus Shield Active (Session #${data.pin})`;
-        showView('active-view');
-        startHeartbeat();
-    });
-
-    state.socket.on('reconnect', () => {
+// --- Student Activity Monitoring ---
+function setupStudentActivity() {
+    const reportVisibility = () => {
         if (state.currentView === 'active-view') {
-            state.socket.emit('join-room', { pin: state.roomPin, name: state.userName, id: state.userId });
+            state.socket.emit('visibility-status', { 
+                pin: state.roomPin, 
+                hidden: document.hidden 
+            });
         }
+    };
+    document.addEventListener('visibilitychange', reportVisibility);
+    window.addEventListener('focus', reportVisibility);
+    window.addEventListener('blur', reportVisibility);
+
+    // Interaction tracking
+    ['mousemove', 'keydown', 'click', 'touchstart'].forEach(evt => {
+        window.addEventListener(evt, () => {
+            state.lastInteraction = Date.now();
+        }, { passive: true });
     });
 }
 
-function handleStatusAlert(student, status) {
-    const now = Date.now();
-    // Debounce alerts to prevent spam (min 5s between same student alerts)
-    if (now - student.lastAlertTime < 5000) return;
-
-    if (status === 'Background') {
-        createPopupAlert(student.name, student.id, 'SWITCHED');
-        student.lastAlertTime = now;
-    } else if (status === 'Active') {
-        createPopupAlert(student.name, student.id, 'OPENED');
-        student.lastAlertTime = now;
-    }
-}
-
-// --- Heartbeat Logic ---
 function startHeartbeat() {
     if (state.heartbeatInterval) clearInterval(state.heartbeatInterval);
     state.heartbeatInterval = setInterval(() => {
         if (state.socket && state.socket.connected) {
             state.socket.emit('heartbeat', {
                 pin: state.roomPin,
-                status: state.localStatus
+                hidden: document.hidden,
+                idle: (Date.now() - state.lastInteraction > 60000)
             });
         }
-    }, 4000); // Every 4 seconds
+    }, 5000); // 5s heartbeat
 }
 
-// Teacher Watchdog (Checks for missing heartbeats)
+// --- Socket Listeners ---
+function setupSocketListeners() {
+    // Teacher: Receive student updates
+    state.socket.on('student-pulse', (data) => {
+        if (state.currentView !== 'teacher-view') return;
+        
+        let student = state.students.find(s => s.id === data.id);
+        if (!student) {
+            student = {
+                socketId: data.socketId,
+                name: data.name,
+                id: data.id,
+                status: 'Active',
+                lastPulse: Date.now(),
+                lastHidden: data.hidden,
+                lastChange: Date.now(),
+                alertCooldown: 0
+            };
+            state.students.push(student);
+            createPopupAlert(student.name, student.id, 'JOINED');
+            playSound('join');
+        } else {
+            student.socketId = data.socketId;
+            student.lastPulse = Date.now();
+            student.lastHidden = data.hidden;
+            student.idle = data.idle;
+        }
+        updateStudentList();
+    });
+
+    state.socket.on('student-visibility-update', (data) => {
+        const student = state.students.find(s => s.socketId === data.socketId);
+        if (student) {
+            student.lastHidden = data.hidden;
+            student.lastPulse = Date.now();
+            // Fast detection handled by monitor loop
+        }
+    });
+
+    state.socket.on('student-offline', (data) => {
+        const student = state.students.find(s => s.socketId === data.socketId);
+        if (student) {
+            student.status = 'Offline';
+            student.lastChange = Date.now();
+            updateStudentList();
+            createPopupAlert(student.name, student.id, 'OFFLINE');
+            playSound('alert');
+        }
+    });
+
+    // Student: Joined success
+    state.socket.on('joined-success', (data) => {
+        getEl('active-status-text').textContent = `Focus Guard Active (Session #${data.pin})`;
+        showView('active-view');
+        startHeartbeat();
+    });
+
+    state.socket.on('teacher-disconnected', () => {
+        alert('Teacher ended the session.');
+        location.reload();
+    });
+}
+
+// --- Teacher Monitor Loop (The Intelligent Brain) ---
 setInterval(() => {
     if (state.currentView !== 'teacher-view') return;
     const now = Date.now();
     let changed = false;
 
     state.students.forEach(student => {
-        if (student.status === 'Disconnected' || student.status === 'Offline') return;
-        
-        const secondsSincePulse = (now - student.lastPulse) / 1000;
-        if (secondsSincePulse > 12) { // 12s timeout
-            student.status = 'Disconnected';
+        if (student.status === 'Offline') return;
+
+        const secSincePulse = (now - student.lastPulse) / 1000;
+        let newStatus = student.status;
+
+        // 1. Check for Disconnection (No pulse for 15s)
+        if (secSincePulse > 15) {
+            newStatus = 'Screen Locked'; 
+        } 
+        // 2. Check for App Switching (Pulse IS fresh, but hidden)
+        else if (student.lastHidden && secSincePulse <= 8) {
+            // Debounce: Wait at least 8s before confirming background app
+            // This prevents false positives during phone locks
+            if (now - student.lastPulse < 2000) { // If pings are still arriving while hidden
+                 newStatus = 'Background App';
+            }
+        }
+        // 3. Check for Idle
+        else if (student.idle) {
+            newStatus = 'Idle';
+        }
+        // 4. Back to Active
+        else if (!student.lastHidden && secSincePulse < 10) {
+            newStatus = 'Active';
+        }
+
+        // Apply state change with debounce
+        if (newStatus !== student.status) {
+            // Only update if it's been in this state for a moment (prevent flicker)
+            student.status = newStatus;
+            student.lastChange = now;
             changed = true;
-            createPopupAlert(student.name, student.id, 'OFFLINE');
+            
+            // Trigger alerts for major switches
+            if (now - student.alertCooldown > 10000) { // 10s alert cooldown per student
+                if (newStatus === 'Background App') {
+                    createPopupAlert(student.name, student.id, 'SWITCHED');
+                    playSound('alert');
+                } else if (newStatus === 'Active') {
+                    createPopupAlert(student.name, student.id, 'OPENED');
+                }
+                student.alertCooldown = now;
+            }
         }
     });
 
     if (changed) updateStudentList();
-}, 5000);
+}, 2000);
 
-// --- View Management ---
+// --- UI Logic ---
 function showView(sectionId) {
     const landing = getEl('landing-content');
     const dashboards = getEl('dashboard-content');
@@ -221,48 +197,9 @@ function showView(sectionId) {
         dashboards?.classList.remove('hidden');
     }
 
-    document.querySelectorAll('.dashboard-section').forEach(section => section.classList.add('hidden'));
+    document.querySelectorAll('.dashboard-section').forEach(s => s.classList.add('hidden'));
     getEl(sectionId)?.classList.remove('hidden');
     state.currentView = sectionId;
-}
-
-function setupEventListeners() {
-    // Navigation
-    const teacherBtns = [getEl('hero-btn-teacher'), getEl('nav-btn-teacher')];
-    teacherBtns.forEach(btn => btn?.addEventListener('click', () => {
-        generatePin();
-        showView('teacher-view');
-        state.socket.emit('create-room', state.roomPin);
-        requestWakeLock();
-    }));
-
-    const studentBtns = [getEl('hero-btn-student'), getEl('nav-btn-student')];
-    studentBtns.forEach(btn => btn?.addEventListener('click', () => showView('student-view')));
-
-    document.querySelectorAll('.back-to-landing').forEach(btn => btn.addEventListener('click', () => location.reload()));
-
-    // Join Session
-    getEl('join-form')?.addEventListener('submit', (e) => {
-        e.preventDefault();
-        state.userName = getEl('student-name').value;
-        state.userId = getEl('student-id').value;
-        state.roomPin = getEl('room-pin').value;
-        state.socket.emit('join-room', { pin: state.roomPin, name: state.userName, id: state.userId });
-    });
-
-    // Theme
-    getEl('theme-toggle')?.addEventListener('click', () => {
-        state.theme = state.theme === 'light' ? 'dark' : 'light';
-        document.documentElement.setAttribute('data-theme', state.theme);
-        localStorage.setItem('theme', state.theme);
-    });
-}
-
-// --- UI Helpers ---
-function generatePin() {
-    const pin = Math.floor(100000 + Math.random() * 900000).toString();
-    state.roomPin = pin;
-    if (getEl('teacher-pin-input')) getEl('teacher-pin-input').value = pin;
 }
 
 function updateStudentList() {
@@ -272,15 +209,16 @@ function updateStudentList() {
 
     count.textContent = state.students.length;
     list.innerHTML = state.students.map(student => {
-        let color = '#ef4444'; // Red (Default)
-        if (student.status === 'Active') color = '#10b981'; // Green
-        if (student.status === 'Idle' || student.status === 'Background') color = '#f59e0b'; // Yellow/Orange
+        const timeStr = new Date(student.lastPulse).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        let color = '#10b981'; // Green
+        if (student.status === 'Background App' || student.status === 'Screen Locked') color = '#f59e0b'; // Yellow
+        if (student.status === 'Offline') color = '#64748b'; // Gray
 
         return `
             <li>
                 <div class="student-info">
                     <span class="student-name">${student.name}</span>
-                    <span class="student-id">ID: ${student.id}</span>
+                    <span class="student-id">Last Pulse: ${timeStr}</span>
                 </div>
                 <span class="status-badge" style="color: ${color}; background: ${color}1A">
                     ${student.status}
@@ -295,16 +233,15 @@ function createPopupAlert(name, id, type) {
     const container = getEl('alert-container');
     if (!container) return;
 
-    const toast = document.createElement('div');
     const config = {
-        JOINED: { text: 'joined class', color: 'green', icon: 'user-plus' },
-        OPENED: { text: 'phone is turned on', color: 'red', icon: 'smartphone' },
-        CLOSED: { text: 'phone is turned off', color: 'green', icon: 'smartphone-off' },
+        JOINED: { text: 'joined session', color: 'green', icon: 'user-plus' },
+        OPENED: { text: 'returned to class', color: 'green', icon: 'zap' },
         SWITCHED: { text: 'switched app', color: 'red', icon: 'layers' },
-        OFFLINE: { text: 'is disconnected', color: 'red', icon: 'wifi-off' }
+        OFFLINE: { text: 'went offline', color: 'red', icon: 'wifi-off' }
     };
     const c = config[type] || config.JOINED;
 
+    const toast = document.createElement('div');
     toast.className = `alert-toast opened`;
     toast.innerHTML = `
         <div class="alert-icon"><i data-lucide="${c.icon}"></i></div>
@@ -319,6 +256,59 @@ function createPopupAlert(name, id, type) {
         toast.style.opacity = '0';
         setTimeout(() => toast.remove(), 500);
     }, 5000);
+}
+
+// Sound Helper
+function playSound(type) {
+    if (!state.soundEnabled) return;
+    try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+
+        oscillator.type = type === 'join' ? 'sine' : 'triangle';
+        oscillator.frequency.setValueAtTime(type === 'join' ? 880 : 440, audioCtx.currentTime);
+        gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        oscillator.start();
+        oscillator.stop(audioCtx.currentTime + 0.1);
+    } catch (e) {}
+}
+
+function setupEventListeners() {
+    const tBtns = [getEl('hero-btn-teacher'), getEl('nav-btn-teacher')];
+    tBtns.forEach(b => b?.addEventListener('click', () => {
+        generatePin();
+        showView('teacher-view');
+        state.socket.emit('create-room', state.roomPin);
+        requestWakeLock();
+    }));
+
+    getEl('hero-btn-student')?.addEventListener('click', () => showView('student-view'));
+    getEl('nav-btn-student')?.addEventListener('click', () => showView('student-view'));
+
+    getEl('join-form')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        state.userName = getEl('student-name').value;
+        state.userId = getEl('student-id').value;
+        state.roomPin = getEl('room-pin').value;
+        state.socket.emit('join-room', { pin: state.roomPin, name: state.userName, id: state.userId });
+    });
+
+    getEl('theme-toggle')?.addEventListener('click', () => {
+        state.theme = state.theme === 'light' ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', state.theme);
+        localStorage.setItem('theme', state.theme);
+    });
+}
+
+function generatePin() {
+    const pin = Math.floor(100000 + Math.random() * 900000).toString();
+    state.roomPin = pin;
+    if (getEl('teacher-pin-input')) getEl('teacher-pin-input').value = pin;
 }
 
 async function requestWakeLock() {
