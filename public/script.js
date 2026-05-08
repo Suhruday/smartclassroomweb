@@ -115,10 +115,8 @@ function triggerAlert(student, message, colorType, withSound = false) {
     // 1. On-screen Toast
     createPopupAlert(student.name, student.id, message, colorType);
     
-    // 2. System Notification (if teacher is in another app)
-    if (document.hidden) {
-        sendSystemNotification('Class Monitor Alert', `${student.name} ${message}`);
-    }
+    // 2. ALWAYS send System Notification (Browser Alert)
+    sendSystemNotification('SmartClass Monitor', `${student.name} ${message}`);
 
     // 3. Optional Sound
     if (withSound) playSound();
@@ -223,8 +221,16 @@ function logEvent(msg) {
 }
 
 function sendSystemNotification(title, body) {
-    if ("Notification" in window && Notification.permission === "granted") {
-        new Notification(title, { body });
+    if (!("Notification" in window)) return;
+    
+    if (Notification.permission === "granted") {
+        new Notification(title, { body, icon: '/favicon.ico' });
+    } else if (Notification.permission !== "denied") {
+        Notification.requestPermission().then(permission => {
+            if (permission === "granted") {
+                new Notification(title, { body, icon: '/favicon.ico' });
+            }
+        });
     }
 }
 
@@ -245,7 +251,7 @@ function setupEventListeners() {
         generatePin();
         showView('teacher-view');
         state.socket.emit('create-room', state.roomPin);
-        if ("Notification" in window) Notification.requestPermission();
+        sendSystemNotification('Alerts Enabled', 'You will now receive system notifications.');
         requestWakeLock();
     }));
 
