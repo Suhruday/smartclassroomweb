@@ -97,11 +97,18 @@ function setupSocketListeners() {
             if (!data.hidden) {
                 // A) ACTIVE CONDITIONS MET
                 if (student.status !== 'Active') {
-                    // C) Phone On Alert (from off or switched state)
-                    student.turnOnCount++;
-                    student.status = 'Active';
-                    triggerAlert(student, 'turned on the phone', 'red');
-                    logEvent(`${student.name} returned to Active state.`);
+                    if (student.status === 'Offline') {
+                        // Return from Offline
+                        student.status = 'Active';
+                        triggerAlert(student, 'came back online', 'blue', true);
+                        logEvent(`${student.name} came back online.`);
+                    } else {
+                        // Phone On Alert (from off or switched state)
+                        student.turnOnCount++;
+                        student.status = 'Active';
+                        triggerAlert(student, 'turned on the phone', 'red');
+                        logEvent(`${student.name} returned to Active state.`);
+                    }
                 }
                 student.hiddenPulseCount = 0;
             } else {
@@ -110,7 +117,6 @@ function setupSocketListeners() {
                 
                 // B) SWITCHED APP CONDITIONS
                 // Page hidden + heartbeat STILL active (we got at least 2 consecutive hidden pulses)
-                // This guarantees we NEVER pass through switched app first on a phone lock.
                 if (student.hiddenPulseCount >= 2 && student.status !== 'Switched App' && student.status !== 'Phone Off') {
                     student.status = 'Switched App';
                     student.switchedAppCount++;
@@ -124,13 +130,20 @@ function setupSocketListeners() {
         updateStudentList();
     });
 
-    state.socket.on('student-offline', (data) => {
-        // Socket disconnect event. We rely primarily on the watchdog for precise detection,
-        // but if the network drops entirely, we can flag them here if not already handled.
+    state.socket.on('student-explicit-offline', (data) => {
+        // Fired when student explicitly closes the browser/tab
         const student = state.students.find(s => s.socketId === data.socketId);
-        if (student) {
-            // Let the watchdog handle Phone Off to prevent false positives during weak internet
+        if (student && student.status !== 'Offline') {
+            student.status = 'Offline';
+            updateStudentList();
+            triggerAlert(student, 'went offline', 'gray', true);
+            logEvent(`${student.name} went offline (browser closed).`);
         }
+    });
+
+    state.socket.on('student-offline', (data) => {
+        // Standard socket disconnect (could be internet drop or background kill).
+        // We rely on the watchdog for precise Offline vs Phone Off detection.
     });
 
     state.socket.on('joined-success', (data) => {
@@ -168,11 +181,19 @@ setInterval(() => {
     state.students.forEach(student => {
         const secSincePulse = (now - student.lastPulse) / 1000;
 
-        // D) DISCONNECTED
-        // Reconnect timeout exceeded (e.g. 60 seconds without network)
+        // D) OFFLINE (Internet loss or long timeout)
         if (secSincePulse > 60) {
-            if (student.status !== 'Disconnected') {
-                student.status = 'Disconnected';
+            if (student.status !== 'Offline') {
+                // Keep phone off and offline as separate states
+                // Do NOT convert phone lock into offline immediately
+                if (student.status === 'Phone Off' && secSincePulse <= 300) return;
+                
+                // Do NOT convert switched app into offline immediately
+                if (student.status === 'Switched App' && secSincePulse <= 300) return;
+
+                student.status = 'Offline';
+                triggerAlert(student, 'went offline', 'gray');
+                logEvent(`${student.name} went offline (timeout).`);
                 changed = true;
             }
             return;
@@ -180,9 +201,15 @@ setInterval(() => {
 
         // C) PHONE OFF
         // 2 missed heartbeats (heartbeat is 5s, so 10s of silence = Phone Off)
-        // DIRECTLY classify as PHONE OFF.
+        // DIRECTLY classify as PHONE OFF (if not already switched).
         if (secSincePulse > 10) {
-            if (student.status !== 'Phone Off') {
+            // --- FIX: Prevent Incorrect Auto Transition ---
+            // Do NOT automatically escalate switched app to phone off
+            if (student.status === 'Switched App') {
+                return; // Keep RED state active continuously
+            }
+
+            if (student.status !== 'Phone Off' && student.status !== 'Offline') {
                 student.status = 'Phone Off';
                 student.hiddenPulseCount = 0; // Reset
                 triggerAlert(student, 'turned off the phone', 'green');
@@ -216,7 +243,7 @@ function updateStudentList() {
         let color = '#3b82f6'; // ACTIVE = BLUE
         if (student.status === 'Switched App') color = '#ef4444'; // SWITCHED APP = RED
         if (student.status === 'Phone Off') color = '#10b981'; // PHONE OFF = GREEN
-        if (student.status === 'Disconnected') color = '#9ca3af'; // DISCONNECTED = GRAY
+        if (student.status === 'Offline') color = '#9ca3af'; // OFFLINE = GRAY
 
         // Calculate Session Duration
         const durationMin = Math.floor((Date.now() - student.joinTime) / 60000);
@@ -274,7 +301,10 @@ function createPopupAlert(name, id, message, colorType) {
     const container = getEl('alert-container');
     if (!container) return;
 
-    let hexColor = colorType === 'green' ? '#10b981' : '#ef4444';
+    let hexColor = '#3b82f6'; // blue
+    if (colorType === 'green') hexColor = '#10b981';
+    if (colorType === 'red') hexColor = '#ef4444';
+    if (colorType === 'gray') hexColor = '#9ca3af';
 
     const toast = document.createElement('div');
     toast.className = `alert-toast opened`;
@@ -339,6 +369,13 @@ function setupEventListeners() {
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         document.documentElement.setAttribute('data-theme', state.theme);
         localStorage.setItem('theme', state.theme);
+    });
+
+    // Handle student explicitly closing the browser or tab
+    window.addEventListener('beforeunload', () => {
+        if (state.socket && state.socket.connected && state.isJoined && state.currentView !== 'teacher-view') {
+            state.socket.emit('student-leaving', { pin: state.roomPin });
+        }
     });
 }
 

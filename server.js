@@ -57,6 +57,15 @@ io.on('connection', (socket) => {
         }
     });
 
+    socket.on('student-leaving', ({ pin }) => {
+        if (rooms[pin] && rooms[pin].students[socket.id]) {
+            io.to(rooms[pin].teacherId).emit('student-explicit-offline', {
+                socketId: socket.id
+            });
+            delete rooms[pin].students[socket.id];
+        }
+    });
+
     socket.on('disconnect', () => {
         for (const pin in rooms) {
             if (rooms[pin].teacherId === socket.id) {
