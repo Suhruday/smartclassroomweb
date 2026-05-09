@@ -152,7 +152,7 @@ setInterval(() => {
         }
 
         // 2. DETECT SILENCE (Phone Off / Lock)
-        if (secSincePulse > 3) {
+        if (secSincePulse > 4) {
             if (student.status !== 'Phone Off') {
                 // If they were "Switched App", we use a 5-min timeout for silence (throttling resilience)
                 if (student.status === 'Switched App') {
@@ -173,8 +173,10 @@ setInterval(() => {
         } 
         // 3. DETECT CONTINUOUS HIDDEN PULSES (Switched App)
         else if (student.lastHidden && student.status === 'Active') {
-            // If they are still sending pulses but hidden for > 12 seconds, they SWITCHED APPS.
-            if (secSinceHidden > 12) {
+            // If they are still sending pulses but hidden for > 20 seconds, they SWITCHED APPS.
+            // A 20s delay ensures that if they just locked the phone, the OS has enough time 
+            // to suspend the browser and trigger the "Phone Off" silence check above.
+            if (secSinceHidden > 20) {
                 student.status = 'Switched App';
                 student.lastSwitchedAlertTime = now;
                 triggerAlert(student, 'switched app', 'red', true);
