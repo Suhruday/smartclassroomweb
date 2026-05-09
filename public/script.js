@@ -109,10 +109,8 @@ function setupSocketListeners() {
                 // The student's screen is hidden, but the browser is still executing heartbeats.
                 student.hiddenPulseCount++;
                 
-                // Wait for 8 consecutive hidden pulses (40s) to confirm it's an app switch.
-                // Because some phones generously keep the browser alive for 30+ seconds after 
-                // the screen is locked, we must wait longer than 30s before declaring an app switch.
-                if (student.hiddenPulseCount >= 8 && student.status === 'Active') {
+                // Wait for 2 consecutive hidden pulses (10s) to confirm it's an app switch.
+                if (student.hiddenPulseCount >= 2 && (student.status === 'Active' || student.status === 'Phone Off')) {
                     student.status = 'Switched App';
                     student.switchedAppCount++;
                     triggerAlert(student, 'switched app', 'red', true);
@@ -183,11 +181,8 @@ setInterval(() => {
         // --- 3. PHONE OFF (GREEN) ---
         // 10 seconds of silence = Phone Lock or Sleep.
         if (secSincePulse > 10) {
-            // CRITICAL: Do NOT overwrite 'Switched App' or 'Offline'.
-            // If a student switches apps, Android will eventually kill Chrome to save battery.
-            // When Chrome is killed, heartbeats stop. We MUST NOT change them to Phone Off.
-            // We must leave them as Switched App forever.
-            if (student.status === 'Switched App' || student.status === 'Offline') {
+            // Do NOT overwrite 'Offline'.
+            if (student.status === 'Offline') {
                 return; 
             }
 
