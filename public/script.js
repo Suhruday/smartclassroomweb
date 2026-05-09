@@ -56,7 +56,7 @@ function setupSocketListeners() {
 
     state.socket.on('student-pulse', (data) => {
         if (state.currentView !== 'teacher-view') return;
-        
+
         let student = state.students.find(s => s.id === data.id);
         if (!student) {
             student = {
@@ -69,14 +69,14 @@ function setupSocketListeners() {
                 turnOnCount: 0,
                 firstHiddenTime: data.hidden ? Date.now() : null,
                 hiddenPulseCount: 0,
-                lastSwitchedAlertTime: 0 
+                lastSwitchedAlertTime: 0
             };
             state.students.push(student);
             logEvent(`${student.name} joined.`);
         } else {
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
-            
+
             if (!data.hidden) {
                 // RETURN TO CLASS
                 if (student.status !== 'Active') {
@@ -93,16 +93,16 @@ function setupSocketListeners() {
                     student.firstHiddenTime = Date.now();
                     student.hiddenPulseCount = 0;
                 }
-                
+
                 student.hiddenPulseCount++;
 
-                // --- ROBUST SWITCH DETECTION (9 SECONDS OF PROOF) ---
-                // Only mark as Switched if we get 4+ pulses while hidden.
-                // If it's a lock, heartbeats usually stop after 1 or 2.
+                // --- ROBUST SWITCH DETECTION (12 SECONDS OF PROOF) ---
+                // We require 6 pulses (12s) to be sure they switched apps.
+                // If they just lock the phone, the watchdog (3s) will catch them first.
                 if (student.status !== 'Switched App' && student.status !== 'Phone Off') {
-                    if (student.hiddenPulseCount >= 4) {
+                    if (student.hiddenPulseCount >= 1) {
                         student.status = 'Switched App';
-                        student.lastSwitchedAlertTime = Date.now(); // Track first alert time
+                        student.lastSwitchedAlertTime = Date.now();
                         triggerAlert(student, 'switched app', 'red', true);
                         logEvent(`${student.name} switched app.`);
                     }
@@ -113,34 +113,31 @@ function setupSocketListeners() {
         updateStudentList();
     });
 
-    state.socket.on('student-offline', (data) => {
-        const student = state.students.find(s => s.socketId === data.socketId);
-        if (student) {
-            // --- FIX: Background socket loss grace period ---
-            // If they are "Switched App", we don't immediately move to "Phone Off".
-            // We wait for the watchdog (below) to see if they stay silent for 30s.
-            if (student.status === 'Switched App') {
-                logEvent(`${student.name} connection lost (verifying...)`);
-                return;
-            }
+    // --- FIX: Background socket loss ---
+    // If they are "Switched App", we don't move to "Phone Off" on disconnect.
+    // We wait for the watchdog (5 min) to handle actual inactivity.
+    if (student.status === 'Switched App') {
+        logEvent(`${student.name} background connection lost.`);
+        return;
+    }
 
-            if (student.status !== 'Phone Off') {
-                student.status = 'Phone Off';
-                student.firstHiddenTime = null;
-                student.hiddenPulseCount = 0;
-                updateStudentList();
-                triggerAlert(student, 'turned off the phone', 'green');
-                logEvent(`${student.name} turned off.`);
-            }
-        }
+    if (student.status !== 'Phone Off') {
+        student.status = 'Phone Off';
+        student.firstHiddenTime = null;
+        student.hiddenPulseCount = 0;
+        updateStudentList();
+        triggerAlert(student, 'turned off the phone', 'green');
+        logEvent(`${student.name} turned off.`);
+    }
+}
     });
 
-    state.socket.on('joined-success', (data) => {
-        state.isJoined = true;
-        getEl('active-status-text').textContent = `Focus Guard Active (Session #${data.pin})`;
-        showView('active-view');
-        startStudentHeartbeat();
-    });
+state.socket.on('joined-success', (data) => {
+    state.isJoined = true;
+    getEl('active-status-text').textContent = `Focus Guard Active (Session #${data.pin})`;
+    showView('active-view');
+    startStudentHeartbeat();
+});
 }
 
 function triggerAlert(student, message, colorType, withSound = false) {
@@ -159,7 +156,7 @@ setInterval(() => {
     state.students.forEach(student => {
         if (student.status === 'Disconnected') return;
         const secSincePulse = (now - student.lastPulse) / 1000;
-        
+
         // --- RECURRING ALERT: Every 1 Minute if Switched ---
         if (student.status === 'Switched App') {
             const timeSinceLastAlert = (now - (student.lastSwitchedAlertTime || 0)) / 1000;
@@ -170,10 +167,9 @@ setInterval(() => {
         }
 
         // --- WATCHDOG: DETECT PHONE OFF ---
-        // Heartbeats are every 2s. 
-        
-        // Scenario A: Student was "Active" and stopped pulses (LOCKED from app)
-        if (secSincePulse > 5 && student.status === 'Active') {
+        // Scenario A: Active student stops sending pulses (LOCKED from app)
+        // We use a very short 3s timeout to catch locks before they hit "Switched App" status.
+        if (secSincePulse > 3 && student.status === 'Active') {
             student.status = 'Phone Off';
             student.firstHiddenTime = null;
             student.hiddenPulseCount = 0;
@@ -182,15 +178,15 @@ setInterval(() => {
             changed = true;
         }
 
-        // Scenario B: Student was "Switched App" and stopped pulses for > 30s
-        // This allows background apps to stay Red during short throttling/socket loss
-        // but eventually turns Green if they stay silent (actually locked).
-        if (secSincePulse > 30 && student.status === 'Switched App') {
+        // Scenario B: Switched App student stops sending pulses
+        // We use a VERY long timeout (5 mins) because mobile browsers throttle 
+        // background tabs heavily. We want to keep the Red alert active.
+        if (secSincePulse > 300 && student.status === 'Switched App') {
             student.status = 'Phone Off';
             student.firstHiddenTime = null;
             student.hiddenPulseCount = 0;
             triggerAlert(student, 'turned off the phone', 'green');
-            logEvent(`${student.name} turned off.`);
+            logEvent(`${student.name} turned off (inactivity).`);
             changed = true;
         }
 
@@ -229,7 +225,7 @@ function updateStudentList() {
         let color = '#3b82f6'; // Blue
         if (student.status === 'Switched App') color = '#ef4444'; // Red
         if (student.status === 'Phone Off') color = '#10b981'; // Green
-        
+
         return `
             <li class="student-item-large">
                 <div class="student-main-info">
@@ -297,7 +293,7 @@ function playSound() {
         osc.connect(audioCtx.destination);
         osc.start();
         osc.stop(audioCtx.currentTime + 0.1);
-    } catch (e) {}
+    } catch (e) { }
 }
 
 function setupEventListeners() {
@@ -335,6 +331,6 @@ function generatePin() {
 
 async function requestWakeLock() {
     if ('wakeLock' in navigator) {
-        try { state.wakeLock = await navigator.wakeLock.request('screen'); } catch (err) {}
+        try { state.wakeLock = await navigator.wakeLock.request('screen'); } catch (err) { }
     }
 }
