@@ -20,7 +20,6 @@ const getEl = (id) => document.getElementById(id);
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
-    // Socket.IO configuration for reconnects
     state.socket = io(window.location.origin, {
         reconnection: true,
         reconnectionDelay: 1000,
@@ -36,14 +35,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ==========================================
-// 6. HEARTBEAT SYSTEM
+// HEARTBEAT SYSTEM
 // ==========================================
 function startStudentHeartbeat() {
     if (state.heartbeatInterval) clearInterval(state.heartbeatInterval);
-    // Heartbeat every 5 seconds as requested
+    // Heartbeat every 5 seconds
     state.heartbeatInterval = setInterval(() => {
-        sendPulse();
-    }, 5000);
+        sendPulse(); 
+    }, 5000); 
 }
 
 function sendPulse() {
@@ -56,21 +55,17 @@ function sendPulse() {
 }
 
 // ==========================================
-// 3. REAL-TIME COMMUNICATION
+// REAL-TIME COMMUNICATION
 // ==========================================
 function setupSocketListeners() {
-    // --- 7. RECONNECT LOGIC ---
     state.socket.on('connect', () => {
         if (state.isJoined) {
-            // Auto reconnect and preserve session
             state.socket.emit('join-room', { pin: state.roomPin, name: state.userName, id: state.userId });
         } else if (state.currentView === 'teacher-view' && state.teacherPin) {
-            // Teacher reconnect
             state.socket.emit('create-room', state.teacherPin);
         }
     });
 
-    // --- 4 & 5. STUDENT MONITORING & DETECTION LOGIC ---
     state.socket.on('student-pulse', (data) => {
         if (state.currentView !== 'teacher-view') return;
 
@@ -95,32 +90,29 @@ function setupSocketListeners() {
             student.lastPulse = Date.now();
 
             if (!data.hidden) {
-                // A) ACTIVE CONDITIONS MET
+                // --- 1. ACTIVE (BLUE) ---
+                // The student is looking at the screen.
                 if (student.status !== 'Active') {
                     if (student.status === 'Offline') {
-                        // Return from Offline
-                        student.status = 'Active';
                         triggerAlert(student, 'came back online', 'blue', true);
                         logEvent(`${student.name} came back online.`);
                     } else {
-                        // Phone On Alert (from off or switched state)
                         student.turnOnCount++;
-                        student.status = 'Active';
-                        triggerAlert(student, 'turned on the phone', 'red');
+                        triggerAlert(student, 'returned to the classroom', 'blue');
                         logEvent(`${student.name} returned to Active state.`);
                     }
+                    student.status = 'Active';
                 }
                 student.hiddenPulseCount = 0;
             } else {
-                // HIDDEN PAGE DETECTED
+                // --- 2. SWITCHED APP (RED) ---
+                // The student's screen is hidden, but the browser is still executing heartbeats.
                 student.hiddenPulseCount++;
-
-                // B) SWITCHED APP CONDITIONS
-                // Page hidden + heartbeat STILL active (we got at least 2 consecutive hidden pulses)
-                if (student.hiddenPulseCount >= 2 && student.status !== 'Switched App' && student.status !== 'Phone Off') {
+                
+                // Wait for 2 consecutive hidden pulses (10s) to confirm it's an app switch and not a quick notification swipe.
+                if (student.hiddenPulseCount >= 2 && student.status === 'Active') {
                     student.status = 'Switched App';
                     student.switchedAppCount++;
-                    // Trigger ONE red alert only
                     triggerAlert(student, 'switched app', 'red', true);
                     logEvent(`${student.name} switched app.`);
                 }
@@ -131,19 +123,15 @@ function setupSocketListeners() {
     });
 
     state.socket.on('student-explicit-offline', (data) => {
-        // Fired when student explicitly closes the browser/tab
+        // --- 4. EXPLICIT OFFLINE (GRAY) ---
+        // Student intentionally closed the browser or tab.
         const student = state.students.find(s => s.socketId === data.socketId);
         if (student && student.status !== 'Offline') {
             student.status = 'Offline';
             updateStudentList();
-            triggerAlert(student, 'went offline', 'gray', true);
-            logEvent(`${student.name} went offline (browser closed).`);
+            triggerAlert(student, 'went offline (closed app)', 'gray', true);
+            logEvent(`${student.name} went offline.`);
         }
-    });
-
-    state.socket.on('student-offline', (data) => {
-        // Standard socket disconnect (could be internet drop or background kill).
-        // We rely on the watchdog for precise Offline vs Phone Off detection.
     });
 
     state.socket.on('joined-success', (data) => {
@@ -155,18 +143,16 @@ function setupSocketListeners() {
 }
 
 // ==========================================
-// 8. ALERT SYSTEM
+// ALERT SYSTEM
 // ==========================================
 function triggerAlert(student, message, colorType, withSound = false) {
     const fullMsg = `${student.name} (${student.id}) ${message}`;
     createPopupAlert(student.name, student.id, message, colorType);
-
-    // Browser Notifications
+    
     if ("Notification" in window && Notification.permission === "granted") {
         new Notification('SmartClass Alert', { body: fullMsg, icon: '/favicon.ico' });
     }
-
-    // Notification Sounds
+    
     if (withSound) playSound();
 }
 
@@ -181,50 +167,42 @@ setInterval(() => {
     state.students.forEach(student => {
         const secSincePulse = (now - student.lastPulse) / 1000;
 
-        // D) OFFLINE (Internet loss or long timeout)
-        if (secSincePulse > 60) {
+        // --- 4. TIMEOUT OFFLINE (GRAY) ---
+        // If a student is completely silent for 15 minutes, we declare them offline.
+        if (secSincePulse > 900) { 
             if (student.status !== 'Offline') {
-                // Keep phone off and offline as separate states
-                // Do NOT convert phone lock into offline immediately
-                if (student.status === 'Phone Off' && secSincePulse <= 30) return;
-
-                // Do NOT convert switched app into offline immediately
-                if (student.status === 'Switched App' && secSincePulse <= 30) return;
-
                 student.status = 'Offline';
-                triggerAlert(student, 'went offline', 'gray');
-                logEvent(`${student.name} went offline (timeout).`);
+                triggerAlert(student, 'session timed out', 'gray');
                 changed = true;
             }
             return;
         }
 
-        // C) PHONE OFF
-        // 2 missed heartbeats (heartbeat is 5s, so 10s of silence = Phone Off)
-        // DIRECTLY classify as PHONE OFF (if not already switched).
+        // --- 3. PHONE OFF (GREEN) ---
+        // 10 seconds of silence = Phone Lock or Sleep.
         if (secSincePulse > 10) {
-            // --- FIX: Prevent Incorrect Auto Transition ---
-            // Do NOT automatically escalate switched app to phone off
-            if (student.status === 'Switched App') {
-                return; // Keep RED state active continuously
+            // Once a student is marked as Switched App or Offline, do NOT overwrite it with Phone Off.
+            // This ensures Switched App stays Red forever, and Offline stays Gray forever.
+            if (student.status === 'Switched App' || student.status === 'Offline') {
+                return; 
             }
 
-            if (student.status === 'Phone Off' && student.status !== 'Offline') {
+            // Only Active students that go suddenly silent get marked as Phone Off.
+            if (student.status !== 'Phone Off') {
                 student.status = 'Phone Off';
                 student.hiddenPulseCount = 0; // Reset
-                triggerAlert(student, 'turned off the phone', 'green');
-                logEvent(`${student.name} turned off the phone.`);
+                triggerAlert(student, 'locked their phone', 'green');
+                logEvent(`${student.name} locked their phone.`);
                 changed = true;
             }
         }
     });
 
-    // Live updates
     if (changed) updateStudentList();
 }, 1000);
 
 // ==========================================
-// 10. TEACHER DASHBOARD UI
+// TEACHER DASHBOARD UI
 // ==========================================
 function updateStudentList() {
     const list = getEl('student-list');
@@ -232,23 +210,19 @@ function updateStudentList() {
     if (!list) return;
 
     count.textContent = state.students.length;
-
+    
     if (state.students.length === 0) {
         list.innerHTML = '<li class="empty-state">Waiting for students...</li>';
         return;
     }
 
     list.innerHTML = state.students.map(student => {
-        // STATE COLORS
         let color = '#3b82f6'; // ACTIVE = BLUE
         if (student.status === 'Switched App') color = '#ef4444'; // SWITCHED APP = RED
         if (student.status === 'Phone Off') color = '#10b981'; // PHONE OFF = GREEN
         if (student.status === 'Offline') color = '#9ca3af'; // OFFLINE = GRAY
 
-        // Calculate Session Duration
         const durationMin = Math.floor((Date.now() - student.joinTime) / 60000);
-
-        // Calculate Last Seen
         const secSincePulse = Math.floor((Date.now() - student.lastPulse) / 1000);
         const lastSeen = secSincePulse < 5 ? 'Just now' : `${secSincePulse}s ago`;
 
@@ -261,7 +235,7 @@ function updateStudentList() {
                 </div>
                 <div class="student-metrics" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;">
                     <div class="metric">
-                        <span class="m-label">Turned On:</span>
+                        <span class="m-label">Returned:</span>
                         <span class="m-value">${student.turnOnCount}</span>
                     </div>
                     <div class="metric">
@@ -269,7 +243,7 @@ function updateStudentList() {
                         <span class="m-value">${student.switchedAppCount}</span>
                     </div>
                     <div class="metric" style="grid-column: span 2;">
-                        <span class="m-label">Last Seen:</span>
+                        <span class="m-label">Last Pulse:</span>
                         <span class="m-value">${lastSeen}</span>
                     </div>
                 </div>
@@ -281,7 +255,7 @@ function updateStudentList() {
     }).join('');
 }
 
-// --- UI Helpers & False Positive Prevention ---
+// --- UI Helpers ---
 function showView(sectionId) {
     const landing = getEl('landing-content');
     const dashboards = getEl('dashboard-content');
@@ -316,8 +290,7 @@ function createPopupAlert(name, id, message, colorType) {
         </div>
     `;
     container.appendChild(toast);
-
-    // Auto remove after 5 seconds
+    
     setTimeout(() => {
         toast.style.opacity = '0';
         setTimeout(() => toast.remove(), 500);
@@ -371,7 +344,6 @@ function setupEventListeners() {
         localStorage.setItem('theme', state.theme);
     });
 
-    // Handle student explicitly closing the browser or tab
     window.addEventListener('beforeunload', () => {
         if (state.socket && state.socket.connected && state.isJoined && state.currentView !== 'teacher-view') {
             state.socket.emit('student-leaving', { pin: state.roomPin });
@@ -385,9 +357,7 @@ function generatePin() {
     if (getEl('teacher-pin-input')) getEl('teacher-pin-input').value = pin;
 }
 
-// 11. MOBILE OPTIMIZATION
 async function requestWakeLock() {
-    // Keeps teacher screen alive
     if ('wakeLock' in navigator) {
         try { state.wakeLock = await navigator.wakeLock.request('screen'); } catch (err) { }
     }
