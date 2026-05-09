@@ -183,10 +183,11 @@ setInterval(() => {
         // --- 3. PHONE OFF (GREEN) ---
         // 10 seconds of silence = Phone Lock or Sleep.
         if (secSincePulse > 10) {
-            // If heartbeats stop entirely, we mark them as Phone Off.
-            // This means if a student is in 'Switched App' and the OS finally puts the 
-            // browser to sleep (stopping the heartbeats), they will convert to Phone Off.
-            if (student.status === 'Offline') {
+            // CRITICAL: Do NOT overwrite 'Switched App' or 'Offline'.
+            // If a student switches apps, Android will eventually kill Chrome to save battery.
+            // When Chrome is killed, heartbeats stop. We MUST NOT change them to Phone Off.
+            // We must leave them as Switched App forever.
+            if (student.status === 'Switched App' || student.status === 'Offline') {
                 return; 
             }
 
