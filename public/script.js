@@ -181,8 +181,11 @@ setInterval(() => {
         // --- 3. PHONE OFF (GREEN) ---
         // 10 seconds of silence = Phone Lock or Sleep.
         if (secSincePulse > 10) {
-            // Do NOT overwrite 'Offline'.
-            if (student.status === 'Offline') {
+            // CRITICAL RULE: Do NOT overwrite 'Switched App'.
+            // When a student switches to WhatsApp, Android will eventually pause the browser 
+            // in the background to save battery, stopping the heartbeats. 
+            // We must ignore that silence and leave them as Switched App.
+            if (student.status === 'Switched App' || student.status === 'Offline') {
                 return; 
             }
 
