@@ -42,8 +42,8 @@ function startStudentHeartbeat() {
     if (state.heartbeatInterval) clearInterval(state.heartbeatInterval);
     // Heartbeat every 5 seconds as requested
     state.heartbeatInterval = setInterval(() => {
-        sendPulse(); 
-    }, 5000); 
+        sendPulse();
+    }, 5000);
 }
 
 function sendPulse() {
@@ -114,7 +114,7 @@ function setupSocketListeners() {
             } else {
                 // HIDDEN PAGE DETECTED
                 student.hiddenPulseCount++;
-                
+
                 // B) SWITCHED APP CONDITIONS
                 // Page hidden + heartbeat STILL active (we got at least 2 consecutive hidden pulses)
                 if (student.hiddenPulseCount >= 2 && student.status !== 'Switched App' && student.status !== 'Phone Off') {
@@ -160,12 +160,12 @@ function setupSocketListeners() {
 function triggerAlert(student, message, colorType, withSound = false) {
     const fullMsg = `${student.name} (${student.id}) ${message}`;
     createPopupAlert(student.name, student.id, message, colorType);
-    
+
     // Browser Notifications
     if ("Notification" in window && Notification.permission === "granted") {
         new Notification('SmartClass Alert', { body: fullMsg, icon: '/favicon.ico' });
     }
-    
+
     // Notification Sounds
     if (withSound) playSound();
 }
@@ -186,10 +186,10 @@ setInterval(() => {
             if (student.status !== 'Offline') {
                 // Keep phone off and offline as separate states
                 // Do NOT convert phone lock into offline immediately
-                if (student.status === 'Phone Off' && secSincePulse <= 300) return;
-                
+                if (student.status === 'Phone Off' && secSincePulse <= 30) return;
+
                 // Do NOT convert switched app into offline immediately
-                if (student.status === 'Switched App' && secSincePulse <= 300) return;
+                if (student.status === 'Switched App' && secSincePulse <= 30) return;
 
                 student.status = 'Offline';
                 triggerAlert(student, 'went offline', 'gray');
@@ -209,7 +209,7 @@ setInterval(() => {
                 return; // Keep RED state active continuously
             }
 
-            if (student.status !== 'Phone Off' && student.status !== 'Offline') {
+            if (student.status === 'Phone Off' && student.status !== 'Offline') {
                 student.status = 'Phone Off';
                 student.hiddenPulseCount = 0; // Reset
                 triggerAlert(student, 'turned off the phone', 'green');
@@ -232,7 +232,7 @@ function updateStudentList() {
     if (!list) return;
 
     count.textContent = state.students.length;
-    
+
     if (state.students.length === 0) {
         list.innerHTML = '<li class="empty-state">Waiting for students...</li>';
         return;
@@ -247,7 +247,7 @@ function updateStudentList() {
 
         // Calculate Session Duration
         const durationMin = Math.floor((Date.now() - student.joinTime) / 60000);
-        
+
         // Calculate Last Seen
         const secSincePulse = Math.floor((Date.now() - student.lastPulse) / 1000);
         const lastSeen = secSincePulse < 5 ? 'Just now' : `${secSincePulse}s ago`;
@@ -316,7 +316,7 @@ function createPopupAlert(name, id, message, colorType) {
         </div>
     `;
     container.appendChild(toast);
-    
+
     // Auto remove after 5 seconds
     setTimeout(() => {
         toast.style.opacity = '0';
