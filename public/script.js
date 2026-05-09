@@ -109,8 +109,10 @@ function setupSocketListeners() {
                 // The student's screen is hidden, but the browser is still executing heartbeats.
                 student.hiddenPulseCount++;
                 
-                // Wait for 2 consecutive hidden pulses (10s) to confirm it's an app switch and not a quick notification swipe.
-                if (student.hiddenPulseCount >= 2 && student.status === 'Active') {
+                // Wait for 4 consecutive hidden pulses (20s) to confirm it's an app switch.
+                // Mobile OS can take up to 15-20 seconds to suspend the browser after a screen lock.
+                // Waiting 20s ensures we don't accidentally mark a Phone Lock as a Switched App.
+                if (student.hiddenPulseCount >= 4 && student.status === 'Active') {
                     student.status = 'Switched App';
                     student.switchedAppCount++;
                     triggerAlert(student, 'switched app', 'red', true);
