@@ -116,11 +116,11 @@ function setupSocketListeners() {
     state.socket.on('student-offline', (data) => {
         const student = state.students.find(s => s.socketId === data.socketId);
         if (student) {
-            // --- FIX: Background socket loss ---
-            // If they are "Switched App", the OS likely killed the socket while they were using another app.
-            // We keep the "Switched App" status and let the watchdog handle actual timeouts.
+            // --- FIX: Background socket loss grace period ---
+            // If they are "Switched App", we don't immediately move to "Phone Off".
+            // We wait for the watchdog (below) to see if they stay silent for 30s.
             if (student.status === 'Switched App') {
-                logEvent(`${student.name} connection suspended (still switched).`);
+                logEvent(`${student.name} connection lost (verifying...)`);
                 return;
             }
 
@@ -170,10 +170,10 @@ setInterval(() => {
         }
 
         // --- WATCHDOG: DETECT PHONE OFF ---
-        // Heartbeats are every 2s. If silent for 4s, the phone is LOCKED.
-        // If student is already "Switched App", we DON'T move them to "Phone Off" 
-        // because heartbeats usually stop when the browser is backgrounded on mobile.
-        if (secSincePulse > 4 && student.status !== 'Phone Off' && student.status !== 'Switched App') {
+        // Heartbeats are every 2s. 
+        
+        // Scenario A: Student was "Active" and stopped pulses (LOCKED from app)
+        if (secSincePulse > 5 && student.status === 'Active') {
             student.status = 'Phone Off';
             student.firstHiddenTime = null;
             student.hiddenPulseCount = 0;
@@ -182,10 +182,21 @@ setInterval(() => {
             changed = true;
         }
 
-        // If they were Switched App but silent for a very long time (e.g., 10 mins), then assume offline.
-        if (secSincePulse > 600 && student.status === 'Switched App') {
+        // Scenario B: Student was "Switched App" and stopped pulses for > 30s
+        // This allows background apps to stay Red during short throttling/socket loss
+        // but eventually turns Green if they stay silent (actually locked).
+        if (secSincePulse > 30 && student.status === 'Switched App') {
             student.status = 'Phone Off';
+            student.firstHiddenTime = null;
+            student.hiddenPulseCount = 0;
+            triggerAlert(student, 'turned off the phone', 'green');
+            logEvent(`${student.name} turned off.`);
             changed = true;
+        }
+
+        // Scenario C: Cleanup for very old disconnected entries
+        if (secSincePulse > 600 && student.status === 'Phone Off') {
+            // Optional: Mark as Disconnected if silent for 10 mins
         }
     });
 
