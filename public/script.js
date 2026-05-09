@@ -100,7 +100,7 @@ function setupSocketListeners() {
                 // We require 6 pulses (12s) to be sure they switched apps.
                 // If they just lock the phone, the watchdog (3s) will catch them first.
                 if (student.status !== 'Switched App' && student.status !== 'Phone Off') {
-                    if (student.hiddenPulseCount >= 1) {
+                    if (student.hiddenPulseCount >= 6) {
                         student.status = 'Switched App';
                         student.lastSwitchedAlertTime = Date.now();
                         triggerAlert(student, 'switched app', 'red', true);
@@ -113,31 +113,34 @@ function setupSocketListeners() {
         updateStudentList();
     });
 
-    // --- FIX: Background socket loss ---
-    // If they are "Switched App", we don't move to "Phone Off" on disconnect.
-    // We wait for the watchdog (5 min) to handle actual inactivity.
-    if (student.status === 'Switched App') {
-        logEvent(`${student.name} background connection lost.`);
-        return;
-    }
+    state.socket.on('student-offline', (data) => {
+        const student = state.students.find(s => s.socketId === data.socketId);
+        if (student) {
+            // --- FIX: Background socket loss ---
+            // If they are "Switched App", we don't move to "Phone Off" on disconnect.
+            // We wait for the watchdog (5 min) to handle actual inactivity.
+            if (student.status === 'Switched App') {
+                logEvent(`${student.name} background connection lost.`);
+                return;
+            }
 
-    if (student.status !== 'Phone Off') {
-        student.status = 'Phone Off';
-        student.firstHiddenTime = null;
-        student.hiddenPulseCount = 0;
-        updateStudentList();
-        triggerAlert(student, 'turned off the phone', 'green');
-        logEvent(`${student.name} turned off.`);
-    }
-}
+            if (student.status !== 'Phone Off') {
+                student.status = 'Phone Off';
+                student.firstHiddenTime = null;
+                student.hiddenPulseCount = 0;
+                updateStudentList();
+                triggerAlert(student, 'turned off the phone', 'green');
+                logEvent(`${student.name} turned off.`);
+            }
+        }
     });
 
-state.socket.on('joined-success', (data) => {
-    state.isJoined = true;
-    getEl('active-status-text').textContent = `Focus Guard Active (Session #${data.pin})`;
-    showView('active-view');
-    startStudentHeartbeat();
-});
+    state.socket.on('joined-success', (data) => {
+        state.isJoined = true;
+        getEl('active-status-text').textContent = `Focus Guard Active (Session #${data.pin})`;
+        showView('active-view');
+        startStudentHeartbeat();
+    });
 }
 
 function triggerAlert(student, message, colorType, withSound = false) {
@@ -188,11 +191,6 @@ setInterval(() => {
             triggerAlert(student, 'turned off the phone', 'green');
             logEvent(`${student.name} turned off (inactivity).`);
             changed = true;
-        }
-
-        // Scenario C: Cleanup for very old disconnected entries
-        if (secSincePulse > 600 && student.status === 'Phone Off') {
-            // Optional: Mark as Disconnected if silent for 10 mins
         }
     });
 
