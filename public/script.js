@@ -68,7 +68,8 @@ function setupSocketListeners() {
                 lastHidden: data.hidden,
                 turnOnCount: 0,
                 firstHiddenTime: data.hidden ? Date.now() : null,
-                hiddenPulseCount: 0 
+                hiddenPulseCount: 0,
+                lastSwitchedAlertTime: 0 
             };
             state.students.push(student);
             logEvent(`${student.name} joined.`);
@@ -101,6 +102,7 @@ function setupSocketListeners() {
                 if (student.status !== 'Switched App' && student.status !== 'Phone Off') {
                     if (student.hiddenPulseCount >= 4) {
                         student.status = 'Switched App';
+                        student.lastSwitchedAlertTime = Date.now(); // Track first alert time
                         triggerAlert(student, 'switched app', 'red', true);
                         logEvent(`${student.name} switched app.`);
                     }
@@ -150,14 +152,31 @@ setInterval(() => {
         if (student.status === 'Disconnected') return;
         const secSincePulse = (now - student.lastPulse) / 1000;
         
-        // --- THE FIX: ULTRA STRICT TIMEOUT ---
+        // --- RECURRING ALERT: Every 1 Minute if Switched ---
+        if (student.status === 'Switched App') {
+            const timeSinceLastAlert = (now - (student.lastSwitchedAlertTime || 0)) / 1000;
+            if (timeSinceLastAlert >= 60) {
+                triggerAlert(student, 'is still using another app', 'red', true);
+                student.lastSwitchedAlertTime = now;
+            }
+        }
+
+        // --- WATCHDOG: DETECT PHONE OFF ---
         // Heartbeats are every 2s. If silent for 4s, the phone is LOCKED.
-        if (secSincePulse > 4 && student.status !== 'Phone Off') {
+        // If student is already "Switched App", we DON'T move them to "Phone Off" 
+        // because heartbeats usually stop when the browser is backgrounded on mobile.
+        if (secSincePulse > 4 && student.status !== 'Phone Off' && student.status !== 'Switched App') {
             student.status = 'Phone Off';
             student.firstHiddenTime = null;
             student.hiddenPulseCount = 0;
             triggerAlert(student, 'turned off the phone', 'green');
             logEvent(`${student.name} turned off.`);
+            changed = true;
+        }
+
+        // If they were Switched App but silent for a very long time (e.g., 10 mins), then assume offline.
+        if (secSincePulse > 600 && student.status === 'Switched App') {
+            student.status = 'Phone Off';
             changed = true;
         }
     });
