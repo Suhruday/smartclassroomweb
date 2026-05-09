@@ -183,18 +183,18 @@ setInterval(() => {
         // --- 3. PHONE OFF (GREEN) ---
         // 10 seconds of silence = Phone Lock or Sleep.
         if (secSincePulse > 10) {
-            // Once a student is marked as Switched App or Offline, do NOT overwrite it with Phone Off.
-            // This ensures Switched App stays Red forever, and Offline stays Gray forever.
-            if (student.status === 'Switched App' || student.status === 'Offline') {
+            // If heartbeats stop entirely, we mark them as Phone Off.
+            // This means if a student is in 'Switched App' and the OS finally puts the 
+            // browser to sleep (stopping the heartbeats), they will convert to Phone Off.
+            if (student.status === 'Offline') {
                 return; 
             }
 
-            // Only Active students that go suddenly silent get marked as Phone Off.
             if (student.status !== 'Phone Off') {
                 student.status = 'Phone Off';
                 student.hiddenPulseCount = 0; // Reset
-                triggerAlert(student, 'locked their phone', 'green');
-                logEvent(`${student.name} locked their phone.`);
+                triggerAlert(student, 'locked their phone / app slept', 'green');
+                logEvent(`${student.name} locked their phone (heartbeats stopped).`);
                 changed = true;
             }
         }
