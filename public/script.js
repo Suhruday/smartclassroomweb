@@ -116,6 +116,14 @@ function setupSocketListeners() {
     state.socket.on('student-offline', (data) => {
         const student = state.students.find(s => s.socketId === data.socketId);
         if (student) {
+            // --- FIX: Background socket loss ---
+            // If they are "Switched App", the OS likely killed the socket while they were using another app.
+            // We keep the "Switched App" status and let the watchdog handle actual timeouts.
+            if (student.status === 'Switched App') {
+                logEvent(`${student.name} connection suspended (still switched).`);
+                return;
+            }
+
             if (student.status !== 'Phone Off') {
                 student.status = 'Phone Off';
                 student.firstHiddenTime = null;
