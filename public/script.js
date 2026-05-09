@@ -109,8 +109,8 @@ function setupSocketListeners() {
                 // The student's screen is hidden, but the browser is still executing heartbeats.
                 student.hiddenPulseCount++;
                 
-                // Wait for 2 consecutive hidden pulses (10s) to confirm it's an app switch.
-                if (student.hiddenPulseCount >= 2 && (student.status === 'Active' || student.status === 'Phone Off')) {
+                // Wait for 6 consecutive hidden pulses (30s) to confirm it's an app switch.
+                if (student.hiddenPulseCount >= 6 && (student.status === 'Active' || student.status === 'Phone Off')) {
                     student.status = 'Switched App';
                     student.switchedAppCount++;
                     triggerAlert(student, 'switched app', 'red', true);
