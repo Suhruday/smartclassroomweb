@@ -262,6 +262,14 @@ setInterval(() => {
                 return; 
             }
 
+            if (student.status === 'Active') {
+                student.status = 'Offline';
+                triggerAlert(student, 'connection lost', 'gray');
+                logEvent(`${student.name} went offline (disconnected).`);
+                changed = true;
+                return;
+            }
+
             if (student.status !== 'Phone Off') {
                 student.status = 'Phone Off';
                 student.hiddenPulseCount = 0; // Reset

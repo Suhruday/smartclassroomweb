@@ -11,6 +11,9 @@ let secSincePulse = (Date.now() - student.lastPulse) / 1000;
 if (secSincePulse > 10) {
     if (student.status === 'Switched App' || student.status === 'Offline') {
         console.log("Returned early");
+    } else if (student.status === 'Active') {
+        student.status = 'Offline';
+        console.log("Triggered Offline (disconnected)!");
     } else if (student.status !== 'Phone Off') {
         student.status = 'Phone Off';
         student.hiddenPulseCount = 0;
