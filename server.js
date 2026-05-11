@@ -22,12 +22,12 @@ io.on('connection', (socket) => {
     });
 
     // Student: Join
-    socket.on('join-room', ({ pin, name, id }) => {
+    socket.on('join-room', ({ pin, name, id, isLocked }) => {
         if (!rooms[pin]) return socket.emit('error-msg', 'Room not found.');
         rooms[pin].students[socket.id] = { name, id };
         socket.join(pin);
         io.to(rooms[pin].teacherId).emit('student-pulse', {
-            socketId: socket.id, name, id, hidden: false, idle: false
+            socketId: socket.id, name, id, hidden: false, idle: false, isLocked: isLocked || false
         });
         socket.emit('joined-success', { pin });
     });

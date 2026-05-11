@@ -166,6 +166,15 @@ function setupSocketListeners() {
         showView('active-view');
         startStudentHeartbeat();
     });
+
+    state.socket.on('error-msg', (msg) => {
+        alert(msg);
+        if (state.isLocked) {
+            state.isLocked = false;
+            getEl('lock-screen-overlay')?.classList.add('hidden');
+            try { document.exitFullscreen(); } catch (e) {}
+        }
+    });
 }
 
 // ==========================================
@@ -222,6 +231,18 @@ setInterval(() => {
                 logEvent(`${student.name} locked their phone (heartbeats stopped).`);
                 changed = true;
             }
+        }
+
+        // --- NEW: SWITCHED APP REPEATED ALERT ---
+        if (student.status === 'Switched App') {
+            if (!student.lastSwitchedAlertTime) {
+                student.lastSwitchedAlertTime = now;
+            } else if (now - student.lastSwitchedAlertTime >= 60000) {
+                student.lastSwitchedAlertTime = now;
+                triggerAlert(student, 'is still in another app!', 'red', true);
+            }
+        } else {
+            student.lastSwitchedAlertTime = null; // Reset when they are no longer in Switched App
         }
     });
 
@@ -362,7 +383,13 @@ function setupEventListeners() {
         state.userName = getEl('student-name').value;
         state.userId = getEl('student-id').value;
         state.roomPin = getEl('room-pin').value;
-        state.socket.emit('join-room', { pin: state.roomPin, name: state.userName, id: state.userId });
+        
+        // Optimistically lock the phone because it requires a user gesture
+        state.isLocked = true;
+        getEl('lock-screen-overlay')?.classList.remove('hidden');
+        try { document.documentElement.requestFullscreen(); } catch (err) {}
+
+        state.socket.emit('join-room', { pin: state.roomPin, name: state.userName, id: state.userId, isLocked: true });
     });
 
     getEl('theme-toggle')?.addEventListener('click', () => {
