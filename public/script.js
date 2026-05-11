@@ -153,6 +153,17 @@ function setupSocketListeners() {
         }
     });
 
+    state.socket.on('student-offline', (data) => {
+        if (state.currentView !== 'teacher-view') return;
+        const student = state.students.find(s => s.socketId === data.socketId);
+        if (student && student.status !== 'Offline') {
+            student.status = 'Offline';
+            updateStudentList();
+            triggerAlert(student, 'connection lost', 'gray', true);
+            logEvent(`${student.name} went offline (disconnected).`);
+        }
+    });
+
     state.socket.on('student-lock-broken', (data) => {
         if (state.currentView !== 'teacher-view') return;
         const student = state.students.find(s => s.socketId === data.socketId);
@@ -442,6 +453,23 @@ function setupEventListeners() {
         }
     });
 
+    document.addEventListener('visibilitychange', () => {
+        // Fallback for some browsers that clear fullscreen element but don't fire fullscreenchange immediately
+        if (state.isLocked && document.hidden && !document.fullscreenElement) {
+            state.isLocked = false;
+            getEl('lock-screen-overlay')?.classList.add('hidden');
+            
+            if ('sendBeacon' in navigator) {
+                const data = new URLSearchParams();
+                data.append('pin', state.roomPin);
+                data.append('socketId', state.socket.id);
+                navigator.sendBeacon('/api/lock-broken', data);
+            } else if (state.socket && state.socket.connected) {
+                state.socket.emit('student-lock-broken', { pin: state.roomPin });
+            }
+            sendPulse();
+        }
+    });
 
     window.addEventListener('beforeunload', () => {
         if (state.socket && state.socket.connected && state.isJoined && state.currentView !== 'teacher-view') {
