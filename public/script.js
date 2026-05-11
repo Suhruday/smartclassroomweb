@@ -292,8 +292,8 @@ function updateStudentList() {
     const absentStudents = [];
 
     sortedStudents.forEach(student => {
-        // If a student exceeds the limit (3+ violations), mark as absent
-        if (student.switchedAppCount + student.turnOnCount >= 3) {
+        // If a student exceeds the limit (more than 3 violations for either), mark as absent
+        if (student.switchedAppCount > 3 || student.turnOnCount > 3) {
             absentStudents.push(student);
         } else {
             presentStudents.push(student);
@@ -449,7 +449,7 @@ function setupEventListeners() {
         let csvContent = "data:text/csv;charset=utf-8,ID,Name,Status,Returned Count,Switched Count,Final Attendance\n";
         
         sortedStudents.forEach(student => {
-            const attendance = (student.switchedAppCount + student.turnOnCount >= 3) ? "Absent" : "Present";
+            const attendance = (student.switchedAppCount > 3 || student.turnOnCount > 3) ? "Absent" : "Present";
             const row = `${student.id},"${student.name}",${student.status},${student.turnOnCount},${student.switchedAppCount},${attendance}`;
             csvContent += row + "\n";
         });
