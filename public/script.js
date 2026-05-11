@@ -157,6 +157,13 @@ function setupSocketListeners() {
         if (state.currentView !== 'teacher-view') return;
         const student = state.students.find(s => s.socketId === data.socketId);
         if (student && student.status !== 'Offline') {
+            // NEW: If they were securely locked (Phone Off), ignore the socket disconnect!
+            // Android often kills network connections to save battery when the screen is off.
+            if (student.status === 'Phone Off') {
+                logEvent(`${student.name} connection lost, but keeping as Phone Off.`);
+                return;
+            }
+
             student.status = 'Offline';
             updateStudentList();
             triggerAlert(student, 'connection lost', 'gray', true);
@@ -432,11 +439,19 @@ function setupEventListeners() {
         sendPulse(); // Immediate heartbeat with unlocked state
     });
 
+    // Touch heuristic to differentiate Home gesture vs Power button
+    let lastTouchTime = 0;
+    document.addEventListener('touchstart', () => { lastTouchTime = Date.now(); }, { passive: true });
+    document.addEventListener('click', () => { lastTouchTime = Date.now(); }, { passive: true });
+
     // Detect if the student breaks out of the lock screen (e.g. System Back button, Home button)
     document.addEventListener('fullscreenchange', () => {
         if (state.isLocked && !document.fullscreenElement) {
-            // ONLY emit lock-broken and remove lock if the document is still visible.
-            if (!document.hidden) {
+            const timeSinceTouch = Date.now() - lastTouchTime;
+            const isIntentionalExit = timeSinceTouch < 2500; // Touch within last 2.5s (Home gesture/swipe)
+
+            // ONLY emit lock-broken and remove lock if the document is still visible OR they used a gesture.
+            if (!document.hidden || isIntentionalExit) {
                 state.isLocked = false;
                 getEl('lock-screen-overlay')?.classList.add('hidden');
                 
@@ -452,9 +467,9 @@ function setupEventListeners() {
                 }
                 sendPulse();
             } else {
-                // The document is hidden (e.g. phone was locked, or home button pressed).
-                // DO NOT set isLocked to false here. Keep it true so heartbeats 
-                // tell the server the phone is locked ('Phone Off' / Green).
+                // The document is hidden AND no recent touch. 
+                // This perfectly matches a physical Power Button press.
+                // Keep isLocked = true so heartbeats tell the server 'Phone Off' (Green).
                 sendPulse();
             }
         }
