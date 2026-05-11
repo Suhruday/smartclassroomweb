@@ -438,8 +438,10 @@ function setupEventListeners() {
             state.isLocked = false;
             getEl('lock-screen-overlay')?.classList.add('hidden');
             
-            if (state.socket && state.socket.connected) {
-                // Use sendBeacon to ensure the event reaches the server even if the browser is freezing
+            // ONLY emit lock-broken if the document is still visible.
+            // If the document is hidden, it could be a simple phone lock (screen off).
+            // We rely on the heartbeat system to eventually detect if it's an actual app switch.
+            if (!document.hidden && state.socket && state.socket.connected) {
                 if ('sendBeacon' in navigator) {
                     const data = new URLSearchParams();
                     data.append('pin', state.roomPin);
@@ -459,14 +461,8 @@ function setupEventListeners() {
             state.isLocked = false;
             getEl('lock-screen-overlay')?.classList.add('hidden');
             
-            if ('sendBeacon' in navigator) {
-                const data = new URLSearchParams();
-                data.append('pin', state.roomPin);
-                data.append('socketId', state.socket.id);
-                navigator.sendBeacon('/api/lock-broken', data);
-            } else if (state.socket && state.socket.connected) {
-                state.socket.emit('student-lock-broken', { pin: state.roomPin });
-            }
+            // We do NOT emit lock-broken here because document.hidden is true.
+            // It could be a phone lock. Let the heartbeat watchdog handle it.
             sendPulse();
         }
     });
