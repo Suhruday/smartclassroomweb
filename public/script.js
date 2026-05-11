@@ -483,6 +483,51 @@ function setupEventListeners() {
         }
     });
 
+    // Highly reliable heuristic for detecting Home Button / Notifications
+    window.addEventListener('blur', () => {
+        if (!state.isLocked) return;
+        
+        // If the window loses focus, wait 150ms. 
+        // If it was a Power Button press, the screen turns off and document.hidden becomes true almost instantly.
+        // If they pulled down notifications or pressed Home, document.hidden remains false 
+        // for several hundred milliseconds while the OS animation plays.
+        setTimeout(() => {
+            if (!document.hidden && state.isLocked) {
+                state.isLocked = false;
+                getEl('lock-screen-overlay')?.classList.add('hidden');
+                
+                if (state.socket && state.socket.connected) {
+                    if ('sendBeacon' in navigator) {
+                        const data = new URLSearchParams();
+                        data.append('pin', state.roomPin);
+                        data.append('socketId', state.socket.id);
+                        navigator.sendBeacon('/api/lock-broken', data);
+                    } else {
+                        state.socket.emit('student-lock-broken', { pin: state.roomPin });
+                    }
+                }
+                sendPulse();
+            }
+        }, 150);
+    });
+
+    // Fallback for backgrounding
+    window.addEventListener('pagehide', () => {
+        if (state.isLocked) {
+            state.isLocked = false;
+            if (state.socket && state.socket.connected) {
+                if ('sendBeacon' in navigator) {
+                    const data = new URLSearchParams();
+                    data.append('pin', state.roomPin);
+                    data.append('socketId', state.socket.id);
+                    navigator.sendBeacon('/api/lock-broken', data);
+                } else {
+                    state.socket.emit('student-lock-broken', { pin: state.roomPin });
+                }
+            }
+        }
+    });
+
     window.addEventListener('beforeunload', () => {
         if (state.socket && state.socket.connected && state.isJoined && state.currentView !== 'teacher-view') {
             state.socket.emit('student-leaving', { pin: state.roomPin });
