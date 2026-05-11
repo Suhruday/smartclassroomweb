@@ -148,13 +148,25 @@
                     </div>
 
                     <div class="student-list-container">
-                        <div class="list-header">
-                            <h3>Connected Students</h3>
-                            <span id="student-count" class="count-pill">0</span>
+                        <div class="list-header" style="margin-bottom: 0.5rem;">
+                            <h3 style="color: #3b82f6;">Present Students</h3>
+                            <span id="student-count-present" class="count-pill">0</span>
                         </div>
-                        <ul id="student-list" class="student-list">
+                        <ul id="student-list-present" class="student-list" style="margin-bottom: 1.5rem;">
                             <li class="empty-state">Waiting for students...</li>
                         </ul>
+
+                        <div class="list-header" style="margin-bottom: 0.5rem;">
+                            <h3 style="color: #ef4444;">Absent Students (3+ Violations)</h3>
+                            <span id="student-count-absent" class="count-pill" style="background: #ef4444; color: white;">0</span>
+                        </div>
+                        <ul id="student-list-absent" class="student-list">
+                            <li class="empty-state">No absent students.</li>
+                        </ul>
+
+                        <button id="btn-download-csv" class="btn-primary" style="margin-top: 1.5rem; width: 100%; display: flex; justify-content: center; align-items: center; gap: 8px;">
+                            <i data-lucide="download"></i> Download Attendance Report
+                        </button>
                     </div>
 
                     <div class="event-log-container">

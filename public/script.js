@@ -279,54 +279,73 @@ setInterval(() => {
 // TEACHER DASHBOARD UI
 // ==========================================
 function updateStudentList() {
-    const list = getEl('student-list');
-    const count = getEl('student-count');
-    if (!list) return;
+    const listPresent = getEl('student-list-present');
+    const countPresent = getEl('student-count-present');
+    const listAbsent = getEl('student-list-absent');
+    const countAbsent = getEl('student-count-absent');
+    if (!listPresent || !listAbsent) return;
 
-    count.textContent = state.students.length;
+    // Sort students by ID alphabetically
+    const sortedStudents = [...state.students].sort((a, b) => a.id.localeCompare(b.id));
+
+    const presentStudents = [];
+    const absentStudents = [];
+
+    sortedStudents.forEach(student => {
+        // If a student exceeds the limit (3+ violations), mark as absent
+        if (student.switchedAppCount + student.turnOnCount >= 3) {
+            absentStudents.push(student);
+        } else {
+            presentStudents.push(student);
+        }
+    });
+
+    countPresent.textContent = presentStudents.length;
+    countAbsent.textContent = absentStudents.length;
     
-    if (state.students.length === 0) {
-        list.innerHTML = '<li class="empty-state">Waiting for students...</li>';
-        return;
-    }
+    const renderStudentList = (students, emptyMsg) => {
+        if (students.length === 0) return `<li class="empty-state">${emptyMsg}</li>`;
+        return students.map(student => {
+            let color = '#3b82f6'; // ACTIVE = BLUE
+            if (student.status === 'Switched App') color = '#ef4444'; // SWITCHED APP = RED
+            if (student.status === 'Phone Off') color = '#10b981'; // PHONE OFF = GREEN
+            if (student.status === 'Offline') color = '#9ca3af'; // OFFLINE = GRAY
 
-    list.innerHTML = state.students.map(student => {
-        let color = '#3b82f6'; // ACTIVE = BLUE
-        if (student.status === 'Switched App') color = '#ef4444'; // SWITCHED APP = RED
-        if (student.status === 'Phone Off') color = '#10b981'; // PHONE OFF = GREEN
-        if (student.status === 'Offline') color = '#9ca3af'; // OFFLINE = GRAY
+            const durationMin = Math.floor((Date.now() - student.joinTime) / 60000);
+            const secSincePulse = Math.floor((Date.now() - student.lastPulse) / 1000);
+            const lastSeen = secSincePulse < 5 ? 'Just now' : `${secSincePulse}s ago`;
 
-        const durationMin = Math.floor((Date.now() - student.joinTime) / 60000);
-        const secSincePulse = Math.floor((Date.now() - student.lastPulse) / 1000);
-        const lastSeen = secSincePulse < 5 ? 'Just now' : `${secSincePulse}s ago`;
+            return `
+                <li class="student-item-large" style="grid-template-columns: 2fr 3fr auto;">
+                    <div class="student-main-info">
+                        <span class="student-name">${student.name}</span>
+                        <span class="student-id">ID: ${student.id}</span>
+                        <span class="metric" style="margin-top:4px;"><span class="m-label">Session:</span> <span class="m-value">${durationMin} min</span></span>
+                    </div>
+                    <div class="student-metrics" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;">
+                        <div class="metric">
+                            <span class="m-label">Returned:</span>
+                            <span class="m-value">${student.turnOnCount}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="m-label">Switched:</span>
+                            <span class="m-value">${student.switchedAppCount}</span>
+                        </div>
+                        <div class="metric" style="grid-column: span 2;">
+                            <span class="m-label">Last Pulse:</span>
+                            <span class="m-value">${lastSeen}</span>
+                        </div>
+                    </div>
+                    <span class="status-badge-solid" style="background: ${color}">
+                        ${student.status}
+                    </span>
+                </li>
+            `;
+        }).join('');
+    };
 
-        return `
-            <li class="student-item-large" style="grid-template-columns: 2fr 3fr auto;">
-                <div class="student-main-info">
-                    <span class="student-name">${student.name}</span>
-                    <span class="student-id">ID: ${student.id}</span>
-                    <span class="metric" style="margin-top:4px;"><span class="m-label">Session:</span> <span class="m-value">${durationMin} min</span></span>
-                </div>
-                <div class="student-metrics" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;">
-                    <div class="metric">
-                        <span class="m-label">Returned:</span>
-                        <span class="m-value">${student.turnOnCount}</span>
-                    </div>
-                    <div class="metric">
-                        <span class="m-label">Switched:</span>
-                        <span class="m-value">${student.switchedAppCount}</span>
-                    </div>
-                    <div class="metric" style="grid-column: span 2;">
-                        <span class="m-label">Last Pulse:</span>
-                        <span class="m-value">${lastSeen}</span>
-                    </div>
-                </div>
-                <span class="status-badge-solid" style="background: ${color}">
-                    ${student.status}
-                </span>
-            </li>
-        `;
-    }).join('');
+    listPresent.innerHTML = renderStudentList(presentStudents, "Waiting for students...");
+    listAbsent.innerHTML = renderStudentList(absentStudents, "No absent students.");
 }
 
 // --- UI Helpers ---
@@ -424,6 +443,26 @@ function setupEventListeners() {
         localStorage.setItem('theme', state.theme);
     });
 
+    // Download CSV Attendance Report
+    getEl('btn-download-csv')?.addEventListener('click', () => {
+        const sortedStudents = [...state.students].sort((a, b) => a.id.localeCompare(b.id));
+        let csvContent = "data:text/csv;charset=utf-8,ID,Name,Status,Returned Count,Switched Count,Final Attendance\n";
+        
+        sortedStudents.forEach(student => {
+            const attendance = (student.switchedAppCount + student.turnOnCount >= 3) ? "Absent" : "Present";
+            const row = `${student.id},"${student.name}",${student.status},${student.turnOnCount},${student.switchedAppCount},${attendance}`;
+            csvContent += row + "\n";
+        });
+        
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `SmartClass_Attendance_${state.roomPin}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    });
+
     // Phone Lock / Unlock Handlers
     getEl('btn-lock-phone')?.addEventListener('click', () => {
         state.isLocked = true;
@@ -439,59 +478,60 @@ function setupEventListeners() {
         sendPulse(); // Immediate heartbeat with unlocked state
     });
 
-    // We wait 200ms when the app loses fullscreen or focus. 
-    // - Power Button: Screen turns off instantly, so document.hidden becomes true within this window.
-    // - App Switch / Home / Recents: The OS plays an animation where the app is STILL VISIBLE for > 300ms.
-    // - Notifications: The app remains visible in the background indefinitely.
-    const handlePotentialLockBreak = () => {
-        if (!state.isLocked) return;
+    // Event Timing Heuristic
+    let lastBlurTime = 0;
+    window.addEventListener('blur', () => { lastBlurTime = Date.now(); });
 
-        setTimeout(() => {
-            if (!state.isLocked) return;
-
-            if (!document.hidden) {
-                // The app is STILL VISIBLE! This was an intentional app switch or notification pull-down.
-                state.isLocked = false;
-                getEl('lock-screen-overlay')?.classList.add('hidden');
-                
-                if (state.socket && state.socket.connected) {
-                    if ('sendBeacon' in navigator) {
-                        const data = new URLSearchParams();
-                        data.append('pin', state.roomPin);
-                        data.append('socketId', state.socket.id);
-                        navigator.sendBeacon('/api/lock-broken', data);
-                    } else {
-                        state.socket.emit('student-lock-broken', { pin: state.roomPin });
-                    }
-                }
-                sendPulse();
+    const emitLockBroken = () => {
+        state.isLocked = false;
+        getEl('lock-screen-overlay')?.classList.add('hidden');
+        if (state.socket && state.socket.connected) {
+            if ('sendBeacon' in navigator) {
+                const data = new URLSearchParams();
+                data.append('pin', state.roomPin);
+                data.append('socketId', state.socket.id);
+                navigator.sendBeacon('/api/lock-broken', data);
             } else {
-                // The document is HIDDEN. The screen turned off (Power Button).
-                // Keep isLocked = true so heartbeats tell the server 'Phone Off' (Green).
-                sendPulse();
+                state.socket.emit('student-lock-broken', { pin: state.roomPin });
             }
-        }, 200);
+        }
+        sendPulse();
     };
 
-    // Detect exiting fullscreen (Home button, Recents, Swipes)
     document.addEventListener('fullscreenchange', () => {
         if (state.isLocked && !document.fullscreenElement) {
-            handlePotentialLockBreak();
+            // Exiting full screen while still visible is an intentional lock break 
+            // (e.g. swiping back or pulling up the nav bar).
+            if (!document.hidden) {
+                emitLockBroken();
+            }
         }
     });
 
     document.addEventListener('visibilitychange', () => {
         if (state.isLocked && document.hidden && !document.fullscreenElement) {
-            // Document became hidden instantly without other triggers. Keep isLocked = true.
-            sendPulse();
+            const timeSinceBlur = Date.now() - lastBlurTime;
+            
+            // Power Button: Instantly turns off screen (blur & hidden fire together, < 50ms apart).
+            // App Switch (Home/Recents): App loses focus (blur) first, animates, THEN hides (> 100ms apart).
+            if (timeSinceBlur > 100 && timeSinceBlur < 3000) {
+                // Delayed hide -> Intentional App Switch!
+                emitLockBroken();
+            } else {
+                // Instant hide -> Power Button. Keep isLocked = true (Phone Off).
+                sendPulse();
+            }
         }
     });
 
-    // Detect pulling down notifications or OS overlays taking focus
+    // Handle pulling down Notification Shade (loses focus, but never hides)
     window.addEventListener('blur', () => {
-        if (state.isLocked) {
-            handlePotentialLockBreak();
-        }
+        if (!state.isLocked) return;
+        setTimeout(() => {
+            if (state.isLocked && !document.hidden) {
+                emitLockBroken();
+            }
+        }, 500); // 500ms gives slower phones enough time to fire visibilitychange if it was a lock
     });
 
     window.addEventListener('beforeunload', () => {
