@@ -439,19 +439,18 @@ function setupEventListeners() {
         sendPulse(); // Immediate heartbeat with unlocked state
     });
 
-    // Touch heuristic to differentiate Home gesture vs Power button
-    let lastTouchTime = 0;
-    document.addEventListener('touchstart', () => { lastTouchTime = Date.now(); }, { passive: true });
-    document.addEventListener('click', () => { lastTouchTime = Date.now(); }, { passive: true });
+    // We wait 200ms when the app loses fullscreen or focus. 
+    // - Power Button: Screen turns off instantly, so document.hidden becomes true within this window.
+    // - App Switch / Home / Recents: The OS plays an animation where the app is STILL VISIBLE for > 300ms.
+    // - Notifications: The app remains visible in the background indefinitely.
+    const handlePotentialLockBreak = () => {
+        if (!state.isLocked) return;
 
-    // Detect if the student breaks out of the lock screen (e.g. System Back button, Home button)
-    document.addEventListener('fullscreenchange', () => {
-        if (state.isLocked && !document.fullscreenElement) {
-            const timeSinceTouch = Date.now() - lastTouchTime;
-            const isIntentionalExit = timeSinceTouch < 2500; // Touch within last 2.5s (Home gesture/swipe)
+        setTimeout(() => {
+            if (!state.isLocked) return;
 
-            // ONLY emit lock-broken and remove lock if the document is still visible OR they used a gesture.
-            if (!document.hidden || isIntentionalExit) {
+            if (!document.hidden) {
+                // The app is STILL VISIBLE! This was an intentional app switch or notification pull-down.
                 state.isLocked = false;
                 getEl('lock-screen-overlay')?.classList.add('hidden');
                 
@@ -467,57 +466,33 @@ function setupEventListeners() {
                 }
                 sendPulse();
             } else {
-                // The document is hidden AND no recent touch. 
-                // This perfectly matches a physical Power Button press.
+                // The document is HIDDEN. The screen turned off (Power Button).
                 // Keep isLocked = true so heartbeats tell the server 'Phone Off' (Green).
                 sendPulse();
             }
+        }, 200);
+    };
+
+    // Detect exiting fullscreen (Home button, Recents, Swipes)
+    document.addEventListener('fullscreenchange', () => {
+        if (state.isLocked && !document.fullscreenElement) {
+            handlePotentialLockBreak();
         }
     });
 
     document.addEventListener('visibilitychange', () => {
         if (state.isLocked && document.hidden && !document.fullscreenElement) {
-            // Document became hidden. Keep isLocked = true to prevent false 'Switched App'
-            // when the phone screen is simply turned off.
+            // Document became hidden instantly without other triggers. Keep isLocked = true.
             sendPulse();
         }
     });
 
-    // Highly reliable heuristic for detecting Home Button / Notifications
+    // Detect pulling down notifications or OS overlays taking focus
     window.addEventListener('blur', () => {
-        if (!state.isLocked) return;
-        
-        // When the window loses focus, we check if they recently touched the screen.
-        // - Pulling down notifications requires a swipe down (touch).
-        // - Pressing Home requires a swipe or tap (touch).
-        // - Pressing the physical Power button involves NO screen touch.
-        const timeSinceTouch = Date.now() - lastTouchTime;
-        const isIntentionalInteraction = timeSinceTouch < 2500;
-
-        setTimeout(() => {
-            // If they intentionally interacted AND the document is still visible (e.g. notifications shade),
-            // OR if it's just a general focus loss from an intentional interaction, we break the lock.
-            // By requiring `isIntentionalInteraction`, we completely ignore physical Power Button presses!
-            if (state.isLocked && isIntentionalInteraction && !document.hidden) {
-                state.isLocked = false;
-                getEl('lock-screen-overlay')?.classList.add('hidden');
-                
-                if (state.socket && state.socket.connected) {
-                    if ('sendBeacon' in navigator) {
-                        const data = new URLSearchParams();
-                        data.append('pin', state.roomPin);
-                        data.append('socketId', state.socket.id);
-                        navigator.sendBeacon('/api/lock-broken', data);
-                    } else {
-                        state.socket.emit('student-lock-broken', { pin: state.roomPin });
-                    }
-                }
-                sendPulse();
-            }
-        }, 300); // 300ms gives slower devices enough time to set document.hidden = true if screen is locking
+        if (state.isLocked) {
+            handlePotentialLockBreak();
+        }
     });
-
-    // Removed the aggressive 'pagehide' listener to prevent false positives when Android sleeps the device.
 
     window.addEventListener('beforeunload', () => {
         if (state.socket && state.socket.connected && state.isJoined && state.currentView !== 'teacher-view') {
