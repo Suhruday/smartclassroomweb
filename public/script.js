@@ -98,29 +98,11 @@ function setupSocketListeners() {
             }
 
             if (data.isLocked) {
-                if (data.hidden) {
-                    // Hidden while locked: Could be Screen Off or App Switch.
-                    // If App Switch, OS might let heartbeats continue for a bit.
-                    student.hiddenPulseCount++;
-                    if (student.hiddenPulseCount >= 3) { // 15 seconds of background heartbeats = definitely Switched App
-                        if (student.status !== 'Switched App') {
-                            student.status = 'Switched App';
-                            student.switchedAppCount++;
-                            triggerAlert(student, 'switched app (backgrounded)', 'red', true);
-                            logEvent(`${student.name} switched app while locked.`);
-                        }
-                    } else if (student.status !== 'Phone Off' && student.status !== 'Switched App') {
-                        student.status = 'Phone Off'; // Assume Phone Off initially
-                        triggerAlert(student, 'locked their phone / app slept', 'green', true);
-                    }
-                } else {
-                    // Visible and locked
-                    student.hiddenPulseCount = 0;
-                    if (student.status !== 'Phone Off') {
-                        student.status = 'Phone Off';
-                        triggerAlert(student, 'turned off their phone', 'green', true);
-                        logEvent(`${student.name} turned off their phone.`);
-                    }
+                student.hiddenPulseCount = 0;
+                if (student.status !== 'Phone Off') {
+                    student.status = 'Phone Off';
+                    triggerAlert(student, 'locked their phone', 'green', true);
+                    logEvent(`${student.name} locked their phone.`);
                 }
             } else if (!data.hidden) {
                 // --- 1. ACTIVE (BLUE) ---
@@ -227,6 +209,19 @@ setInterval(() => {
     state.students.forEach(student => {
         const secSincePulse = (now - student.lastPulse) / 1000;
 
+        // --- NEW: SWITCHED APP REPEATED ALERT ---
+        // Must be at the top of the loop so it's never skipped by a return
+        if (student.status === 'Switched App') {
+            if (!student.lastSwitchedAlertTime) {
+                student.lastSwitchedAlertTime = now;
+            } else if (now - student.lastSwitchedAlertTime >= 60000) {
+                student.lastSwitchedAlertTime = now;
+                triggerAlert(student, 'is still in another app!', 'red', true);
+            }
+        } else {
+            student.lastSwitchedAlertTime = null; // Reset when they are no longer in Switched App
+        }
+
         // --- 4. TIMEOUT OFFLINE (GRAY) ---
         // If a student is completely silent for 15 minutes, we declare them offline.
         if (secSincePulse > 900) { 
@@ -256,18 +251,6 @@ setInterval(() => {
                 logEvent(`${student.name} locked their phone (heartbeats stopped).`);
                 changed = true;
             }
-        }
-
-        // --- NEW: SWITCHED APP REPEATED ALERT ---
-        if (student.status === 'Switched App') {
-            if (!student.lastSwitchedAlertTime) {
-                student.lastSwitchedAlertTime = now;
-            } else if (now - student.lastSwitchedAlertTime >= 60000) {
-                student.lastSwitchedAlertTime = now;
-                triggerAlert(student, 'is still in another app!', 'red', true);
-            }
-        } else {
-            student.lastSwitchedAlertTime = null; // Reset when they are no longer in Switched App
         }
     });
 
