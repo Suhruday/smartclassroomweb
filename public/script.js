@@ -13,7 +13,8 @@ const state = {
     heartbeatInterval: null,
     wakeLock: null,
     isJoined: false,
-    teacherPin: ''
+    teacherPin: '',
+    isLocked: false
 };
 
 const getEl = (id) => document.getElementById(id);
@@ -49,7 +50,8 @@ function sendPulse() {
     if (state.socket && state.socket.connected && state.isJoined) {
         state.socket.emit('heartbeat', {
             pin: state.roomPin,
-            hidden: document.hidden
+            hidden: document.hidden,
+            isLocked: state.isLocked
         });
     }
 }
@@ -89,13 +91,24 @@ function setupSocketListeners() {
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
 
-            if (!data.hidden) {
+            if (data.isLocked) {
+                if (student.status !== 'Phone Off') {
+                    student.status = 'Phone Off';
+                    triggerAlert(student, 'turned off their phone', 'green', true);
+                    logEvent(`${student.name} turned off their phone.`);
+                    student.hiddenPulseCount = 0;
+                }
+            } else if (!data.hidden) {
                 // --- 1. ACTIVE (BLUE) ---
                 // The student is looking at the screen.
                 if (student.status !== 'Active') {
                     if (student.status === 'Offline') {
                         triggerAlert(student, 'came back online', 'blue', true);
                         logEvent(`${student.name} came back online.`);
+                    } else if (student.status === 'Phone Off') {
+                        student.turnOnCount++;
+                        triggerAlert(student, 'turned on their phone', 'blue', true);
+                        logEvent(`${student.name} turned on their phone.`);
                     } else {
                         student.turnOnCount++;
                         triggerAlert(student, 'returned to the classroom', 'blue');
@@ -343,6 +356,21 @@ function setupEventListeners() {
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         document.documentElement.setAttribute('data-theme', state.theme);
         localStorage.setItem('theme', state.theme);
+    });
+
+    // Phone Lock / Unlock Handlers
+    getEl('btn-lock-phone')?.addEventListener('click', () => {
+        state.isLocked = true;
+        getEl('lock-screen-overlay')?.classList.remove('hidden');
+        try { document.documentElement.requestFullscreen(); } catch (e) {}
+        sendPulse(); // Immediate heartbeat with locked state
+    });
+
+    getEl('btn-unlock-phone')?.addEventListener('click', () => {
+        state.isLocked = false;
+        getEl('lock-screen-overlay')?.classList.add('hidden');
+        try { document.exitFullscreen(); } catch (e) {}
+        sendPulse(); // Immediate heartbeat with unlocked state
     });
 
     window.addEventListener('beforeunload', () => {

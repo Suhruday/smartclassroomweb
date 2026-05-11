@@ -33,7 +33,7 @@ io.on('connection', (socket) => {
     });
 
     // Activity Updates
-    socket.on('heartbeat', ({ pin, hidden, idle }) => {
+    socket.on('heartbeat', ({ pin, hidden, idle, isLocked }) => {
         if (rooms[pin]) {
             const student = rooms[pin].students[socket.id];
             if (student) {
@@ -42,7 +42,8 @@ io.on('connection', (socket) => {
                     name: student.name,
                     id: student.id,
                     hidden,
-                    idle
+                    idle,
+                    isLocked
                 });
             }
         }
