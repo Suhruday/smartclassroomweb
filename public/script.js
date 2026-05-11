@@ -487,12 +487,18 @@ function setupEventListeners() {
     window.addEventListener('blur', () => {
         if (!state.isLocked) return;
         
-        // If the window loses focus, wait 150ms. 
-        // If it was a Power Button press, the screen turns off and document.hidden becomes true almost instantly.
-        // If they pulled down notifications or pressed Home, document.hidden remains false 
-        // for several hundred milliseconds while the OS animation plays.
+        // When the window loses focus, we check if they recently touched the screen.
+        // - Pulling down notifications requires a swipe down (touch).
+        // - Pressing Home requires a swipe or tap (touch).
+        // - Pressing the physical Power button involves NO screen touch.
+        const timeSinceTouch = Date.now() - lastTouchTime;
+        const isIntentionalInteraction = timeSinceTouch < 2500;
+
         setTimeout(() => {
-            if (!document.hidden && state.isLocked) {
+            // If they intentionally interacted AND the document is still visible (e.g. notifications shade),
+            // OR if it's just a general focus loss from an intentional interaction, we break the lock.
+            // By requiring `isIntentionalInteraction`, we completely ignore physical Power Button presses!
+            if (state.isLocked && isIntentionalInteraction && !document.hidden) {
                 state.isLocked = false;
                 getEl('lock-screen-overlay')?.classList.add('hidden');
                 
@@ -508,25 +514,10 @@ function setupEventListeners() {
                 }
                 sendPulse();
             }
-        }, 150);
+        }, 300); // 300ms gives slower devices enough time to set document.hidden = true if screen is locking
     });
 
-    // Fallback for backgrounding
-    window.addEventListener('pagehide', () => {
-        if (state.isLocked) {
-            state.isLocked = false;
-            if (state.socket && state.socket.connected) {
-                if ('sendBeacon' in navigator) {
-                    const data = new URLSearchParams();
-                    data.append('pin', state.roomPin);
-                    data.append('socketId', state.socket.id);
-                    navigator.sendBeacon('/api/lock-broken', data);
-                } else {
-                    state.socket.emit('student-lock-broken', { pin: state.roomPin });
-                }
-            }
-        }
-    });
+    // Removed the aggressive 'pagehide' listener to prevent false positives when Android sleeps the device.
 
     window.addEventListener('beforeunload', () => {
         if (state.socket && state.socket.connected && state.isJoined && state.currentView !== 'teacher-view') {
