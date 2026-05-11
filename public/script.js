@@ -147,6 +147,19 @@ function setupSocketListeners() {
         }
     });
 
+    state.socket.on('student-lock-broken', (data) => {
+        if (state.currentView !== 'teacher-view') return;
+        const student = state.students.find(s => s.socketId === data.socketId);
+        if (student) {
+            student.status = 'Switched App';
+            student.switchedAppCount++;
+            student.hiddenPulseCount = 6; // Force the heartbeat logic to agree they switched
+            triggerAlert(student, 'switched app (broke lock screen)', 'red', true);
+            logEvent(`${student.name} switched app (broke lock screen).`);
+            updateStudentList();
+        }
+    });
+
     state.socket.on('joined-success', (data) => {
         state.isJoined = true;
         getEl('active-status-text').textContent = `Focus Guard Active (Session #${data.pin})`;
@@ -367,10 +380,35 @@ function setupEventListeners() {
     });
 
     getEl('btn-unlock-phone')?.addEventListener('click', () => {
-        state.isLocked = false;
+        state.isLocked = false; // Set to false BEFORE exiting fullscreen
         getEl('lock-screen-overlay')?.classList.add('hidden');
         try { document.exitFullscreen(); } catch (e) {}
         sendPulse(); // Immediate heartbeat with unlocked state
+    });
+
+    // Detect if the student breaks out of the lock screen (e.g. System Back button, Home button)
+    document.addEventListener('fullscreenchange', () => {
+        if (state.isLocked && !document.fullscreenElement) {
+            state.isLocked = false;
+            getEl('lock-screen-overlay')?.classList.add('hidden');
+            if (state.socket && state.socket.connected) {
+                state.socket.emit('student-lock-broken', { pin: state.roomPin });
+            }
+            sendPulse();
+        }
+    });
+
+    document.addEventListener('visibilitychange', () => {
+        // If they switch apps or go to home screen while locked
+        if (state.isLocked && document.hidden) {
+            state.isLocked = false;
+            getEl('lock-screen-overlay')?.classList.add('hidden');
+            try { document.exitFullscreen(); } catch (e) {}
+            if (state.socket && state.socket.connected) {
+                state.socket.emit('student-lock-broken', { pin: state.roomPin });
+            }
+            sendPulse();
+        }
     });
 
     window.addEventListener('beforeunload', () => {

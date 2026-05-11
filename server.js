@@ -58,6 +58,14 @@ io.on('connection', (socket) => {
         }
     });
 
+    socket.on('student-lock-broken', ({ pin }) => {
+        if (rooms[pin]) {
+            io.to(rooms[pin].teacherId).emit('student-lock-broken', {
+                socketId: socket.id
+            });
+        }
+    });
+
     socket.on('student-leaving', ({ pin }) => {
         if (rooms[pin] && rooms[pin].students[socket.id]) {
             io.to(rooms[pin].teacherId).emit('student-explicit-offline', {
