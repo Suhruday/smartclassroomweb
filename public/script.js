@@ -478,10 +478,6 @@ function setupEventListeners() {
         sendPulse(); // Immediate heartbeat with unlocked state
     });
 
-    // Event Timing Heuristic
-    let lastBlurTime = 0;
-    window.addEventListener('blur', () => { lastBlurTime = Date.now(); });
-
     const emitLockBroken = () => {
         state.isLocked = false;
         getEl('lock-screen-overlay')?.classList.add('hidden');
@@ -498,40 +494,48 @@ function setupEventListeners() {
         sendPulse();
     };
 
+    // 1. Exiting Fullscreen (Swiping back)
     document.addEventListener('fullscreenchange', () => {
         if (state.isLocked && !document.fullscreenElement) {
-            // Exiting full screen while still visible is an intentional lock break 
-            // (e.g. swiping back or pulling up the nav bar).
-            if (!document.hidden) {
-                emitLockBroken();
-            }
+            // The OS exits fullscreen for BOTH the Power Button and intentional cheating.
+            // We wait 1000ms to let the OS settle. 
+            // If it was the Power Button, the screen will be completely off (document.hidden = true).
+            // If they just swiped back to cheat, the screen is still on (document.hidden = false).
+            setTimeout(() => {
+                if (state.isLocked && !document.hidden) {
+                    emitLockBroken();
+                }
+            }, 1000);
         }
     });
 
+    // 2. Power Button (Screen Off)
     document.addEventListener('visibilitychange', () => {
-        if (state.isLocked && document.hidden && !document.fullscreenElement) {
-            const timeSinceBlur = Date.now() - lastBlurTime;
-            
-            // Power Button: Instantly turns off screen (blur & hidden fire together, < 50ms apart).
-            // App Switch (Home/Recents): App loses focus (blur) first, animates, THEN hides (> 100ms apart).
-            if (timeSinceBlur > 100 && timeSinceBlur < 3000) {
-                // Delayed hide -> Intentional App Switch!
-                emitLockBroken();
-            } else {
-                // Instant hide -> Power Button. Keep isLocked = true (Phone Off).
-                sendPulse();
-            }
+        if (state.isLocked && document.hidden) {
+            // The screen turned off or the app was backgrounded.
+            // We keep isLocked = true, which sends 'Phone Off' (Green) via heartbeats.
+            sendPulse();
         }
     });
 
-    // Handle pulling down Notification Shade (loses focus, but never hides)
+    // 3. Recent Apps / Home Screen
+    // The pagehide event fires when the OS actively backgrounds the app to show another app.
+    // It typically does NOT fire when the screen simply turns off (Power Button).
+    window.addEventListener('pagehide', () => {
+        if (state.isLocked) {
+            emitLockBroken();
+        }
+    });
+
+    // Handle Notification Shade (loses focus, but never hides)
     window.addEventListener('blur', () => {
         if (!state.isLocked) return;
         setTimeout(() => {
+            // If it lost focus 1000ms ago and is STILL visible, they are looking at notifications.
             if (state.isLocked && !document.hidden) {
                 emitLockBroken();
             }
-        }, 500); // 500ms gives slower phones enough time to fire visibilitychange if it was a lock
+        }, 1000); 
     });
 
     window.addEventListener('beforeunload', () => {
