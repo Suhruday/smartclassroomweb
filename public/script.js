@@ -398,18 +398,6 @@ function setupEventListeners() {
         }
     });
 
-    document.addEventListener('visibilitychange', () => {
-        // If they switch apps or go to home screen while locked
-        if (state.isLocked && document.hidden) {
-            state.isLocked = false;
-            getEl('lock-screen-overlay')?.classList.add('hidden');
-            try { document.exitFullscreen(); } catch (e) {}
-            if (state.socket && state.socket.connected) {
-                state.socket.emit('student-lock-broken', { pin: state.roomPin });
-            }
-            sendPulse();
-        }
-    });
 
     window.addEventListener('beforeunload', () => {
         if (state.socket && state.socket.connected && state.isJoined && state.currentView !== 'teacher-view') {
