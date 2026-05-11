@@ -91,12 +91,36 @@ function setupSocketListeners() {
             student.socketId = data.socketId;
             student.lastPulse = Date.now();
 
+            // If under penalty, ignore normal status updates
+            if (student.lockBrokenPenaltyUntil && Date.now() < student.lockBrokenPenaltyUntil) {
+                updateStudentList();
+                return;
+            }
+
             if (data.isLocked) {
-                if (student.status !== 'Phone Off') {
-                    student.status = 'Phone Off';
-                    triggerAlert(student, 'turned off their phone', 'green', true);
-                    logEvent(`${student.name} turned off their phone.`);
+                if (data.hidden) {
+                    // Hidden while locked: Could be Screen Off or App Switch.
+                    // If App Switch, OS might let heartbeats continue for a bit.
+                    student.hiddenPulseCount++;
+                    if (student.hiddenPulseCount >= 3) { // 15 seconds of background heartbeats = definitely Switched App
+                        if (student.status !== 'Switched App') {
+                            student.status = 'Switched App';
+                            student.switchedAppCount++;
+                            triggerAlert(student, 'switched app (backgrounded)', 'red', true);
+                            logEvent(`${student.name} switched app while locked.`);
+                        }
+                    } else if (student.status !== 'Phone Off' && student.status !== 'Switched App') {
+                        student.status = 'Phone Off'; // Assume Phone Off initially
+                        triggerAlert(student, 'locked their phone / app slept', 'green', true);
+                    }
+                } else {
+                    // Visible and locked
                     student.hiddenPulseCount = 0;
+                    if (student.status !== 'Phone Off') {
+                        student.status = 'Phone Off';
+                        triggerAlert(student, 'turned off their phone', 'green', true);
+                        logEvent(`${student.name} turned off their phone.`);
+                    }
                 }
             } else if (!data.hidden) {
                 // --- 1. ACTIVE (BLUE) ---
@@ -154,6 +178,7 @@ function setupSocketListeners() {
             student.status = 'Switched App';
             student.switchedAppCount++;
             student.hiddenPulseCount = 6; // Force the heartbeat logic to agree they switched
+            student.lockBrokenPenaltyUntil = Date.now() + 10000; // 10 second penalty
             triggerAlert(student, 'switched app (broke lock screen)', 'red', true);
             logEvent(`${student.name} switched app (broke lock screen).`);
             updateStudentList();
