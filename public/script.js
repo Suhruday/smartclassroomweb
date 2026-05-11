@@ -426,8 +426,17 @@ function setupEventListeners() {
         if (state.isLocked && !document.fullscreenElement) {
             state.isLocked = false;
             getEl('lock-screen-overlay')?.classList.add('hidden');
+            
             if (state.socket && state.socket.connected) {
-                state.socket.emit('student-lock-broken', { pin: state.roomPin });
+                // Use sendBeacon to ensure the event reaches the server even if the browser is freezing
+                if ('sendBeacon' in navigator) {
+                    const data = new URLSearchParams();
+                    data.append('pin', state.roomPin);
+                    data.append('socketId', state.socket.id);
+                    navigator.sendBeacon('/api/lock-broken', data);
+                } else {
+                    state.socket.emit('student-lock-broken', { pin: state.roomPin });
+                }
             }
             sendPulse();
         }

@@ -10,9 +10,18 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const rooms = {};
+
+app.post('/api/lock-broken', (req, res) => {
+    const { pin, socketId } = req.body;
+    if (pin && socketId && rooms[pin] && rooms[pin].students[socketId]) {
+        io.to(rooms[pin].teacherId).emit('student-lock-broken', { socketId });
+    }
+    res.sendStatus(200);
+});
 
 io.on('connection', (socket) => {
     // Teacher: Create
