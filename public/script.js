@@ -179,8 +179,10 @@ function setupSocketListeners() {
             student.switchedAppCount++;
             student.hiddenPulseCount = 6; // Force the heartbeat logic to agree they switched
             student.lockBrokenPenaltyUntil = Date.now() + 10000; // 10 second penalty
-            triggerAlert(student, 'switched app (broke lock screen)', 'red', true);
-            logEvent(`${student.name} switched app (broke lock screen).`);
+            
+            const reason = data.reason || 'switched app / broke lock screen';
+            triggerAlert(student, reason, 'red', true);
+            logEvent(`${student.name} violation: ${reason}.`);
             updateStudentList();
         }
     });
@@ -190,6 +192,14 @@ function setupSocketListeners() {
         getEl('active-status-text').textContent = `Focus Guard Active (Session #${data.pin})`;
         showView('active-view');
         startStudentHeartbeat();
+        
+        // Ensure fullscreen is active, otherwise display fullscreen overlay
+        if (document.fullscreenElement) {
+            enableGestureShield(true);
+        } else {
+            getEl('fullscreen-lock-overlay')?.classList.remove('hidden');
+            enableGestureShield(false);
+        }
     });
 
     state.socket.on('error-msg', (msg) => {
@@ -476,17 +486,39 @@ function setupEventListeners() {
         state.isLocked = true;
         getEl('lock-screen-overlay')?.classList.remove('hidden');
         try { document.documentElement.requestFullscreen(); } catch (e) {}
+        enableGestureShield(true);
         sendPulse(); // Immediate heartbeat with locked state
     });
 
     getEl('btn-unlock-phone')?.addEventListener('click', () => {
-        state.isLocked = false; // Set to false BEFORE exiting fullscreen
+        state.isLocked = false;
         getEl('lock-screen-overlay')?.classList.add('hidden');
-        try { document.exitFullscreen(); } catch (e) {}
+        
+        // Keep them in fullscreen!
+        if (!document.fullscreenElement) {
+            try { document.documentElement.requestFullscreen(); } catch (e) {}
+        }
+        
+        enableGestureShield(true);
         sendPulse(); // Immediate heartbeat with unlocked state
     });
 
-    const emitLockBroken = () => {
+    getEl('btn-re-fullscreen')?.addEventListener('click', () => {
+        try {
+            document.documentElement.requestFullscreen().then(() => {
+                getEl('fullscreen-lock-overlay')?.classList.add('hidden');
+                enableGestureShield(true);
+            }).catch(err => {
+                console.error("Failed to re-enter fullscreen:", err);
+            });
+        } catch (e) {
+            console.error("Fullscreen API not supported:", e);
+        }
+    });
+
+    const emitLockBroken = (reason) => {
+        if (!state.isJoined) return;
+        console.warn("Lock broken! Reason:", reason || "Unknown");
         state.isLocked = false;
         getEl('lock-screen-overlay')?.classList.add('hidden');
         if (state.socket && state.socket.connected) {
@@ -494,57 +526,83 @@ function setupEventListeners() {
                 const data = new URLSearchParams();
                 data.append('pin', state.roomPin);
                 data.append('socketId', state.socket.id);
+                data.append('reason', reason || 'swiped notifications / exited fullscreen');
                 navigator.sendBeacon('/api/lock-broken', data);
             } else {
-                state.socket.emit('student-lock-broken', { pin: state.roomPin });
+                state.socket.emit('student-lock-broken', { pin: state.roomPin, reason: reason || 'swiped notifications / exited fullscreen' });
             }
         }
         sendPulse();
     };
 
-    // 1. Exiting Fullscreen (Swiping back)
+    // 1. Fullscreen Change Handler (Exiting Fullscreen or Swiping back)
     document.addEventListener('fullscreenchange', () => {
-        if (state.isLocked && !document.fullscreenElement) {
-            // The OS exits fullscreen for BOTH the Power Button and intentional cheating.
-            // We wait 1000ms to let the OS settle. 
-            // If it was the Power Button, the screen will be completely off (document.hidden = true).
-            // If they just swiped back to cheat, the screen is still on (document.hidden = false).
-            setTimeout(() => {
-                if (state.isLocked && !document.hidden) {
-                    emitLockBroken();
-                }
-            }, 1000);
+        const isCurrentlyFullscreen = !!document.fullscreenElement;
+        
+        if (state.isJoined) {
+            if (!isCurrentlyFullscreen) {
+                // Exited fullscreen! Show the Fullscreen Enforcement Overlay.
+                getEl('fullscreen-lock-overlay')?.classList.remove('hidden');
+                enableGestureShield(false); // Disable gesture shield to allow clicking the button
+                
+                // Power Button vs Swipe down check
+                setTimeout(() => {
+                    if (state.isJoined && !document.hidden && !document.fullscreenElement) {
+                        emitLockBroken("Exited Fullscreen Focus");
+                    }
+                }, 1000);
+            } else {
+                // Re-entered fullscreen! Hide the overlay.
+                getEl('fullscreen-lock-overlay')?.classList.add('hidden');
+                enableGestureShield(true); // Re-enable gesture shield
+            }
         }
     });
 
     // 2. Power Button (Screen Off)
     document.addEventListener('visibilitychange', () => {
-        if (state.isLocked && document.hidden) {
+        if (state.isJoined && state.isLocked && document.hidden) {
             // The screen turned off or the app was backgrounded.
-            // We keep isLocked = true, which sends 'Phone Off' (Green) via heartbeats.
             sendPulse();
         }
     });
 
     // 3. Recent Apps / Home Screen
-    // The pagehide event fires when the OS actively backgrounds the app to show another app.
-    // It typically does NOT fire when the screen simply turns off (Power Button).
     window.addEventListener('pagehide', () => {
-        if (state.isLocked) {
-            emitLockBroken();
+        if (state.isJoined) {
+            emitLockBroken("App backgrounded or tab closed");
         }
     });
 
-    // Handle Notification Shade (loses focus, but never hides)
+    // 4. Handle Notification Shade (loses focus, but never hides)
     window.addEventListener('blur', () => {
-        if (!state.isLocked) return;
+        if (!state.isJoined) return;
+        
         setTimeout(() => {
-            // If it lost focus 1000ms ago and is STILL visible, they are looking at notifications.
-            if (state.isLocked && !document.hidden) {
-                emitLockBroken();
+            // If it lost focus 500ms ago and is STILL visible, they swiped down the notification drawer.
+            if (state.isJoined && !document.hidden) {
+                emitLockBroken("Opened Notification Drawer");
+                
+                // Show fullscreen lock overlay to force them to focus back and tap the screen
+                getEl('fullscreen-lock-overlay')?.classList.remove('hidden');
+                enableGestureShield(false);
             }
-        }, 1000); 
+        }, 500); 
     });
+
+    // 5. Touch Interceptor for Top Edge Swipe Prevention
+    const touchHandler = (e) => {
+        if (!state.isJoined) return;
+        if (e.touches && e.touches.length > 0) {
+            const clientY = e.touches[0].clientY;
+            if (clientY < 45) {
+                e.preventDefault();
+            }
+        }
+    };
+    
+    window.addEventListener('touchstart', touchHandler, { passive: false });
+    window.addEventListener('touchmove', touchHandler, { passive: false });
 
     window.addEventListener('beforeunload', () => {
         if (state.socket && state.socket.connected && state.isJoined && state.currentView !== 'teacher-view') {
@@ -562,5 +620,17 @@ function generatePin() {
 async function requestWakeLock() {
     if ('wakeLock' in navigator) {
         try { state.wakeLock = await navigator.wakeLock.request('screen'); } catch (err) { }
+    }
+}
+
+// Toggle gesture shield overlay visibility
+function enableGestureShield(enable) {
+    const shield = getEl('gesture-shield');
+    if (shield) {
+        if (enable) {
+            shield.className = 'gesture-shield-active';
+        } else {
+            shield.className = 'hidden';
+        }
     }
 }

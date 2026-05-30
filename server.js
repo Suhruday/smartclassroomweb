@@ -16,9 +16,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 const rooms = {};
 
 app.post('/api/lock-broken', (req, res) => {
-    const { pin, socketId } = req.body;
+    const { pin, socketId, reason } = req.body;
     if (pin && socketId && rooms[pin] && rooms[pin].students[socketId]) {
-        io.to(rooms[pin].teacherId).emit('student-lock-broken', { socketId });
+        io.to(rooms[pin].teacherId).emit('student-lock-broken', { socketId, reason });
     }
     res.sendStatus(200);
 });
@@ -67,10 +67,11 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('student-lock-broken', ({ pin }) => {
+    socket.on('student-lock-broken', ({ pin, reason }) => {
         if (rooms[pin]) {
             io.to(rooms[pin].teacherId).emit('student-lock-broken', {
-                socketId: socket.id
+                socketId: socket.id,
+                reason
             });
         }
     });

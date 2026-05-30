@@ -251,6 +251,21 @@
             </button>
         </div>
 
+        <!-- Gesture Shield for Top Swipe Prevention -->
+        <div id="gesture-shield" class="hidden"></div>
+
+        <!-- Fullscreen Enforcement Overlay -->
+        <div id="fullscreen-lock-overlay" class="fullscreen-lock-overlay hidden">
+            <div class="fullscreen-lock-content">
+                <i data-lucide="alert-triangle" style="width: 64px; height: 64px;"></i>
+                <h2>Focus Required</h2>
+                <p>You have left fullscreen mode. To participate in this classroom session, you must remain in fullscreen mode. Any attempt to leave fullscreen or open the notification shade is flagged as a violation.</p>
+                <button id="btn-re-fullscreen" class="btn-primary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 1.1rem; padding: 14px;">
+                    <i data-lucide="maximize"></i> Resume Fullscreen Focus
+                </button>
+            </div>
+        </div>
+
         <!-- Alert Container -->
         <div id="alert-container" class="alert-container"></div>
     </main>
