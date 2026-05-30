@@ -546,6 +546,30 @@ function setupEventListeners() {
         }, 1000); 
     });
 
+    // Block edge gestures to prevent pulling down notification bar or exiting fullscreen via navigation gestures
+    let touchStartY = 0;
+    document.addEventListener('touchstart', (e) => {
+        if (!state.isLocked) return;
+        touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+
+    document.addEventListener('touchmove', (e) => {
+        if (!state.isLocked) return;
+        const touchCurrentY = e.touches[0].clientY;
+        
+        // 1. Swipe down from top (attempting to pull down notification drawer)
+        if (touchStartY < 60 && (touchCurrentY - touchStartY) > 5) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        
+        // 2. Swipe up from bottom (attempting to reveal home/recent apps navigation bar)
+        if (touchStartY > window.innerHeight - 60 && (touchStartY - touchCurrentY) > 5) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+    }, { passive: false });
+
     window.addEventListener('beforeunload', () => {
         if (state.socket && state.socket.connected && state.isJoined && state.currentView !== 'teacher-view') {
             state.socket.emit('student-leaving', { pin: state.roomPin });
