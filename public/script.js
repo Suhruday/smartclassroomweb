@@ -66,12 +66,6 @@ function setupSocketListeners() {
         } else if (state.currentView === 'teacher-view' && state.teacherPin) {
             state.socket.emit('create-room', state.teacherPin);
         }
-        
-        // Report any pending lock breaks saved while offline
-        if (localStorage.getItem('lockBrokenPending') === 'true') {
-            state.socket.emit('student-lock-broken', { pin: state.roomPin });
-            localStorage.removeItem('lockBrokenPending');
-        }
     });
 
     state.socket.on('student-pulse', (data) => {
@@ -196,12 +190,6 @@ function setupSocketListeners() {
         getEl('active-status-text').textContent = `Focus Guard Active (Session #${data.pin})`;
         showView('active-view');
         startStudentHeartbeat();
-        
-        // Report any pending lock breaks upon successful join
-        if (localStorage.getItem('lockBrokenPending') === 'true') {
-            state.socket.emit('student-lock-broken', { pin: state.roomPin });
-            localStorage.removeItem('lockBrokenPending');
-        }
     });
 
     state.socket.on('error-msg', (msg) => {
@@ -499,29 +487,18 @@ function setupEventListeners() {
     });
 
     const emitLockBroken = () => {
-        if (!state.isLocked) return; // Prevent duplicate execution
         state.isLocked = false;
-        
-        // Save violation to localStorage immediately.
-        // Even if they cut the internet, they are caught. Next time they connect, the server will be notified!
-        localStorage.setItem('lockBrokenPending', 'true');
-        
         getEl('lock-screen-overlay')?.classList.add('hidden');
-        
-        // Try to report to the server immediately
         if (state.socket && state.socket.connected) {
-            state.socket.emit('student-lock-broken', { pin: state.roomPin });
-            localStorage.removeItem('lockBrokenPending'); // Successfully emitted
-        } else if ('sendBeacon' in navigator) {
-            const data = new URLSearchParams();
-            data.append('pin', state.roomPin); 
-            data.append('socketId', state.socket ? state.socket.id : '');
-            const beaconSent = navigator.sendBeacon('/api/lock-broken', data);
-            if (beaconSent) {
-                localStorage.removeItem('lockBrokenPending'); // Successfully queued in beacon
+            if ('sendBeacon' in navigator) {
+                const data = new URLSearchParams();
+                data.append('pin', state.roomPin);
+                data.append('socketId', state.socket.id);
+                navigator.sendBeacon('/api/lock-broken', data);
+            } else {
+                state.socket.emit('student-lock-broken', { pin: state.roomPin });
             }
         }
-        
         sendPulse();
     };
 
@@ -529,14 +506,14 @@ function setupEventListeners() {
     document.addEventListener('fullscreenchange', () => {
         if (state.isLocked && !document.fullscreenElement) {
             // The OS exits fullscreen for BOTH the Power Button and intentional cheating.
-            // We wait 800ms to let the OS settle.
-            // This prevents students from pulling down the notification bar, toggling the internet,
-            // and escaping without a recordable online trace.
+            // We wait 1000ms to let the OS settle. 
+            // If it was the Power Button, the screen will be completely off (document.hidden = true).
+            // If they just swiped back to cheat, the screen is still on (document.hidden = false).
             setTimeout(() => {
                 if (state.isLocked && !document.hidden) {
                     emitLockBroken();
                 }
-            }, 800);
+            }, 1000);
         }
     });
 
@@ -558,50 +535,15 @@ function setupEventListeners() {
         }
     });
 
-    // Handle Notification Shade / Swiping down the system UI drawer
-    // We wait 800ms to let the OS settle when power button is clicked, 
-    // while proactive swipe block and offline handler catch instant cheating.
+    // Handle Notification Shade (loses focus, but never hides)
     window.addEventListener('blur', () => {
         if (!state.isLocked) return;
         setTimeout(() => {
-            // If it lost focus 800ms ago and is STILL visible, they are looking at notifications.
+            // If it lost focus 1000ms ago and is STILL visible, they are looking at notifications.
             if (state.isLocked && !document.hidden) {
                 emitLockBroken();
             }
-        }, 800); 
-    });
-
-    // 4. Swipe down from top (Notification bar) or swipe up from bottom (Navigation gestures)
-    // Proactively intercepts screen edge gestures while locked and instantly breaks the lock/reports!
-    let touchStartY = 0;
-    document.addEventListener('touchstart', (e) => {
-        if (!state.isLocked) return;
-        touchStartY = e.touches[0].clientY;
-    }, { passive: true });
-
-    document.addEventListener('touchmove', (e) => {
-        if (!state.isLocked) return;
-        const touchCurrentY = e.touches[0].clientY;
-        
-        // Swipe down from top edge (attempting to pull notification bar)
-        if (touchStartY < 50 && (touchCurrentY - touchStartY) > 30) {
-            e.preventDefault();
-            emitLockBroken();
-        }
-        
-        // Swipe up from bottom edge (attempting to trigger home/recent apps gesture)
-        if (touchStartY > window.innerHeight - 50 && (touchStartY - touchCurrentY) > 30) {
-            e.preventDefault();
-            emitLockBroken();
-        }
-    }, { passive: false });
-
-    // 5. Offline detection while visible (Manual internet toggle)
-    // If they go offline while locked and the screen is visible, it's a clear violation!
-    window.addEventListener('offline', () => {
-        if (state.isLocked && !document.hidden) {
-            emitLockBroken();
-        }
+        }, 1000); 
     });
 
     window.addEventListener('beforeunload', () => {
