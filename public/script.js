@@ -529,14 +529,14 @@ function setupEventListeners() {
     document.addEventListener('fullscreenchange', () => {
         if (state.isLocked && !document.fullscreenElement) {
             // The OS exits fullscreen for BOTH the Power Button and intentional cheating.
-            // We wait 250ms (reduced from 1000ms) to let the OS settle.
+            // We wait 800ms to let the OS settle.
             // This prevents students from pulling down the notification bar, toggling the internet,
-            // and escaping the 1000ms window without a recordable online trace.
+            // and escaping without a recordable online trace.
             setTimeout(() => {
                 if (state.isLocked && !document.hidden) {
                     emitLockBroken();
                 }
-            }, 250);
+            }, 800);
         }
     });
 
@@ -559,16 +559,16 @@ function setupEventListeners() {
     });
 
     // Handle Notification Shade / Swiping down the system UI drawer
-    // Reduce the delay from 1000ms to 250ms to instantly detect pulling down the notification bar
-    // and prevent the student from turning off the internet to hide the violation.
+    // We wait 800ms to let the OS settle when power button is clicked, 
+    // while proactive swipe block and offline handler catch instant cheating.
     window.addEventListener('blur', () => {
         if (!state.isLocked) return;
         setTimeout(() => {
-            // If it lost focus 250ms ago and is STILL visible, they are looking at notifications.
+            // If it lost focus 800ms ago and is STILL visible, they are looking at notifications.
             if (state.isLocked && !document.hidden) {
                 emitLockBroken();
             }
-        }, 250); 
+        }, 800); 
     });
 
     // 4. Swipe down from top (Notification bar) or swipe up from bottom (Navigation gestures)
