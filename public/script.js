@@ -569,7 +569,7 @@ function setupEventListeners() {
 
     // 3. Recent Apps / Home Screen
     window.addEventListener('pagehide', () => {
-        if (state.isJoined) {
+        if (state.isLocked) {
             emitLockBroken("App backgrounded or tab closed");
         }
     });
